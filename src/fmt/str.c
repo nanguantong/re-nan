@@ -12,6 +12,9 @@
 #include <re_mem.h>
 #include <re_fmt.h>
 
+enum {
+	X64_STRSIZE = 17,
+};
 
 /**
  * Convert a ascii hex string to binary format
@@ -86,6 +89,29 @@ int str_dup(char **dst, const char *src)
 
 
 /**
+ * Converts an uint64_t to a 0-terminated string
+ *
+ * @param dst Pointer to destination string (set on return)
+ * @param val Value
+ *
+ * @return 0 if success, otherwise errorcode
+ */
+int str_x64dup(char **dst, uint64_t val)
+{
+	char *str;
+
+	str = mem_alloc(X64_STRSIZE, NULL);
+	if (!str)
+		return ENOMEM;
+
+	(void)re_snprintf(str, X64_STRSIZE, "%016llx", val);
+
+	*dst = str;
+	return 0;
+}
+
+
+/**
  * Compare two 0-terminated strings
  *
  * @param s1 First string
@@ -139,4 +165,57 @@ int str_casecmp(const char *s1, const char *s2)
 size_t str_len(const char *s)
 {
 	return s ? strlen(s) : 0;
+}
+
+
+/**
+ * Convert various possible boolean strings to a bool
+ *
+ * @param val  Pointer to bool for returned value
+ * @param str  String to be converted
+ *
+ * @return int 0 if success, otherwise errorcode
+ */
+int str_bool(bool *val, const char *str)
+{
+	int err = 0;
+
+	if (!val || !str_isset(str))
+		return EINVAL;
+
+	if (!str_casecmp(str, "0")) {
+		*val = false;
+	}
+	else if (!str_casecmp(str, "1")) {
+		*val = true;
+	}
+	else if (!str_casecmp(str, "false")) {
+		*val = false;
+	}
+	else if (!str_casecmp(str, "true")) {
+		*val = true;
+	}
+	else if (!str_casecmp(str, "disable")) {
+		*val = false;
+	}
+	else if (!str_casecmp(str, "enable")) {
+		*val = true;
+	}
+	else if (!str_casecmp(str, "off")) {
+		*val = false;
+	}
+	else if (!str_casecmp(str, "on")) {
+		*val = true;
+	}
+	else if (!str_casecmp(str, "no")) {
+		*val = false;
+	}
+	else if (!str_casecmp(str, "yes")) {
+		*val = true;
+	}
+	else {
+		err = EINVAL;
+	}
+
+	return err;
 }

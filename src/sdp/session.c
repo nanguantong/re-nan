@@ -37,7 +37,7 @@ static void destructor(void *arg)
 int sdp_session_alloc(struct sdp_session **sessp, const struct sa *laddr)
 {
 	struct sdp_session *sess;
-	int err = 0, i;
+	int i;
 
 	if (!sessp || !laddr)
 		return EINVAL;
@@ -58,12 +58,9 @@ int sdp_session_alloc(struct sdp_session **sessp, const struct sa *laddr)
 		sess->rbwv[i] = -1;
 	}
 
-	if (err)
-		mem_deref(sess);
-	else
-		*sessp = sess;
+	*sessp = sess;
 
-	return err;
+	return 0;
 }
 
 
@@ -106,6 +103,18 @@ void sdp_session_set_laddr(struct sdp_session *sess, const struct sa *laddr)
 
 
 /**
+ * Get the local network address of an SDP Session
+ *
+ * @param sess  SDP Session
+ * @return Local network address
+ */
+const struct sa *sdp_session_laddr(struct sdp_session *sess)
+{
+	return sess ? &sess->laddr : NULL;
+}
+
+
+/**
  * Set the local bandwidth of an SDP Session
  *
  * @param sess SDP Session
@@ -115,7 +124,7 @@ void sdp_session_set_laddr(struct sdp_session *sess, const struct sa *laddr)
 void sdp_session_set_lbandwidth(struct sdp_session *sess,
 				enum sdp_bandwidth type, int32_t bw)
 {
-	if (!sess || type >= SDP_BANDWIDTH_MAX)
+	if (!sess || type < SDP_BANDWIDTH_MIN || type >= SDP_BANDWIDTH_MAX)
 		return;
 
 	sess->lbwv[type] = bw;
@@ -178,7 +187,7 @@ void sdp_session_del_lattr(struct sdp_session *sess, const char *name)
 int32_t sdp_session_lbandwidth(const struct sdp_session *sess,
 			       enum sdp_bandwidth type)
 {
-	if (!sess || type >= SDP_BANDWIDTH_MAX)
+	if (!sess || type < SDP_BANDWIDTH_MIN || type >= SDP_BANDWIDTH_MAX)
 		return 0;
 
 	return sess->lbwv[type];
@@ -196,7 +205,7 @@ int32_t sdp_session_lbandwidth(const struct sdp_session *sess,
 int32_t sdp_session_rbandwidth(const struct sdp_session *sess,
 				enum sdp_bandwidth type)
 {
-	if (!sess || type >= SDP_BANDWIDTH_MAX)
+	if (!sess || type < SDP_BANDWIDTH_MIN || type >= SDP_BANDWIDTH_MAX)
 		return 0;
 
 	return sess->rbwv[type];
@@ -283,6 +292,8 @@ int sdp_session_debug(struct re_printf *pf, const struct sdp_session *sess)
 		err |= re_hprintf(pf, "    %H\n", sdp_attr_debug, le->data);
 
 	err |= re_hprintf(pf, "  remote attributes:\n");
+	err |= re_hprintf(pf, "  remote direction: %s\n",
+			sdp_dir_name(sess->rdir));
 
 	for (le=sess->rattrl.head; le; le=le->next)
 		err |= re_hprintf(pf, "    %H\n", sdp_attr_debug, le->data);

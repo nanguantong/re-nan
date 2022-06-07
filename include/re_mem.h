@@ -19,8 +19,6 @@ struct memstat {
 	size_t bytes_peak;   /**< Peak bytes allocated         */
 	size_t blocks_cur;   /**< Current blocks allocated     */
 	size_t blocks_peak;  /**< Peak blocks allocated        */
-	size_t size_min;     /**< Lowest block size allocated  */
-	size_t size_max;     /**< Largest block size allocated */
 };
 
 void    *mem_alloc(size_t size, mem_destroy_h *dh);
@@ -40,6 +38,4 @@ int      mem_get_stat(struct memstat *mstat);
 
 
 /* Secure memory functions */
-int  mem_seccmp(const volatile uint8_t *volatile s1,
-		const volatile uint8_t *volatile s2,
-		size_t n);
+int mem_seccmp(const uint8_t *s1, const uint8_t *s2, size_t n);

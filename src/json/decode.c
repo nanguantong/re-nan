@@ -54,11 +54,11 @@ static bool is_number(long double *d, bool *isfloat, const struct pl *pl)
 	if (!pl->l)
 		return false;
 
-	p = &pl->p[pl->l];
+	p = &pl->p[pl->l - 1];
 
-	while (p > pl->p) {
-
-		const char ch = *--p;
+	while (p >= pl->p) {
+		const char ch = *p;
+		--p;
 
 		if (ch == 'e' || ch == 'E') {
 
@@ -66,7 +66,7 @@ static bool is_number(long double *d, bool *isfloat, const struct pl *pl)
 				return false;
 
 			exp = true;
-			e   = neg ? -v : v;
+			e   = (int64_t)(neg ? -v : v);
 			v   = 0;
 			mul = 1;
 			neg = false;
@@ -154,7 +154,7 @@ static int decode_value(struct json_value *val, const struct pl *pl)
 		}
 		else {
 			val->type      = JSON_INT;
-			val->v.integer = dbl;
+			val->v.integer = (int64_t)dbl;
 		}
 	}
 	else if (!pl_strcasecmp(pl, "false")) {
@@ -443,10 +443,16 @@ static int _json_decode(const char **str, size_t *len,
 
 			if (**str == '\"')
 				inquot = true;
-
 			val.p = *str;
 			val.l = 0;
 			ws = 0;
+
+			if (!inobj && !inarray) {
+				val.l = *len;
+				if (array_entry(idx, &val, aeh, arg))
+					val.l = 0;
+			}
+
 			break;
 		}
 	}

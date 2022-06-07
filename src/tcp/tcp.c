@@ -25,9 +25,9 @@
 #include <re_mem.h>
 #include <re_mbuf.h>
 #include <re_list.h>
+#include <re_net.h>
 #include <re_main.h>
 #include <re_sa.h>
-#include <re_net.h>
 #include <re_tcp.h>
 
 
@@ -39,12 +39,10 @@
 /** Platform independent buffer type cast */
 #ifdef WIN32
 #define BUF_CAST (char *)
-#define SOK_CAST (int)
 #define SIZ_CAST (int)
 #define close closesocket
 #else
 #define BUF_CAST
-#define SOK_CAST
 #define SIZ_CAST
 #endif
 
@@ -57,10 +55,11 @@ enum {
 
 /** Defines a listening TCP socket */
 struct tcp_sock {
-	int fd;               /**< Listening file descriptor         */
-	int fdc;              /**< Cached connection file descriptor */
+	re_sock_t fd;         /**< Listening file descriptor         */
+	re_sock_t fdc;        /**< Cached connection file descriptor */
 	tcp_conn_h *connh;    /**< TCP Connect handler               */
 	void *arg;            /**< Handler argument                  */
+	uint8_t tos;          /**< Type-of-service field             */
 };
 
 
@@ -68,7 +67,7 @@ struct tcp_sock {
 struct tcp_conn {
 	struct list helpers;  /**< List of TCP-helpers               */
 	struct list sendq;    /**< Sending queue                     */
-	int fdc;              /**< Connection file descriptor        */
+	re_sock_t fdc;        /**< Connection file descriptor        */
 	tcp_estab_h *estabh;  /**< Connection established handler    */
 	tcp_send_h *sendh;    /**< Data send handler                 */
 	tcp_recv_h *recvh;    /**< Data receive handler              */
@@ -79,6 +78,7 @@ struct tcp_conn {
 	size_t txqsz_max;
 	bool active;          /**< We are connecting flag            */
 	bool connected;       /**< Connection is connected flag      */
+	uint8_t tos;          /**< Type-of-service field             */
 };
 
 
@@ -135,11 +135,11 @@ static void sock_destructor(void *data)
 {
 	struct tcp_sock *ts = data;
 
-	if (ts->fd >= 0) {
+	if (ts->fd != BAD_SOCK) {
 		fd_close(ts->fd);
 		(void)close(ts->fd);
 	}
-	if (ts->fdc >= 0)
+	if (ts->fdc != BAD_SOCK)
 		(void)close(ts->fdc);
 }
 
@@ -151,7 +151,7 @@ static void conn_destructor(void *data)
 	list_flush(&tc->helpers);
 	list_flush(&tc->sendq);
 
-	if (tc->fdc >= 0) {
+	if (tc->fdc != BAD_SOCK) {
 		fd_close(tc->fdc);
 		(void)close(tc->fdc);
 	}
@@ -216,6 +216,7 @@ static int dequeue(struct tcp_conn *tc)
 {
 	struct tcp_qent *qe = list_ledata(tc->sendq.head);
 	ssize_t n;
+	int err;
 #ifdef MSG_NOSIGNAL
 	const int flags = MSG_NOSIGNAL; /* disable SIGPIPE signal */
 #else
@@ -229,15 +230,16 @@ static int dequeue(struct tcp_conn *tc)
 	}
 
 	n = send(tc->fdc, BUF_CAST mbuf_buf(&qe->mb),
-		 qe->mb.end - qe->mb.pos, flags);
+		 SIZ_CAST (qe->mb.end - qe->mb.pos), flags);
 	if (n < 0) {
-		if (EAGAIN == errno)
+		err = ERRNO_SOCK;
+		if (err == EAGAIN)
 			return 0;
 #ifdef WIN32
-		if (WSAEWOULDBLOCK == WSAGetLastError())
+		if (err == WSAEWOULDBLOCK)
 			return 0;
 #endif
-		return errno;
+		return err;
 	}
 
 	tc->txqsz  -= n;
@@ -256,10 +258,10 @@ static void conn_close(struct tcp_conn *tc, int err)
 	tc->txqsz = 0;
 
 	/* Stop polling */
-	if (tc->fdc >= 0) {
+	if (tc->fdc != BAD_SOCK) {
 		fd_close(tc->fdc);
 		(void)close(tc->fdc);
-		tc->fdc = -1;
+		tc->fdc = BAD_SOCK;
 	}
 
 	if (tc->closeh)
@@ -284,7 +286,7 @@ static void tcp_recv_handler(int flags, void *arg)
 	/* check for any errors */
 	if (-1 == getsockopt(tc->fdc, SOL_SOCKET, SO_ERROR,
 			     BUF_CAST &err, &err_len)) {
-		DEBUG_WARNING("recv handler: getsockopt: (%m)\n", errno);
+		DEBUG_WARNING("recv handler: getsockopt: (%m)\n", ERRNO_SOCK);
 		return;
 	}
 
@@ -370,14 +372,22 @@ static void tcp_recv_handler(int flags, void *arg)
 	if (!mb)
 		return;
 
-	n = recv(tc->fdc, BUF_CAST mb->buf, mb->size, 0);
+	n = recv(tc->fdc, BUF_CAST mb->buf, SIZ_CAST mb->size, 0);
 	if (0 == n) {
 		mem_deref(mb);
 		conn_close(tc, 0);
 		return;
 	}
 	else if (n < 0) {
-		DEBUG_WARNING("recv handler: recv(): %m\n", errno);
+		err = ERRNO_SOCK;
+		DEBUG_WARNING("recv handler: recv(): %m\n", err);
+#ifdef WIN32
+		if (err == WSAECONNRESET || err == WSAECONNABORTED) {
+			mem_deref(mb);
+			conn_close(tc, err);
+			return;
+		}
+#endif
 		goto out;
 	}
 
@@ -450,7 +460,7 @@ static struct tcp_conn *conn_alloc(tcp_estab_h *eh, tcp_recv_h *rh,
 
 	list_init(&tc->helpers);
 
-	tc->fdc    = -1;
+	tc->fdc    = BAD_SOCK;
 	tc->rxsz   = TCP_RXSZ_DEFAULT;
 	tc->txqsz_max = TCP_TXQSZ_DEFAULT;
 	tc->estabh = eh;
@@ -462,7 +472,7 @@ static struct tcp_conn *conn_alloc(tcp_estab_h *eh, tcp_recv_h *rh,
 }
 
 
-static void tcp_sockopt_set(int fd)
+static void tcp_sockopt_set(re_sock_t fd)
 {
 #ifdef SO_LINGER
 	const struct linger dl = {0, 0};
@@ -475,6 +485,30 @@ static void tcp_sockopt_set(int fd)
 #else
 	(void)fd;
 #endif
+}
+
+
+static int  tcp_sock_setopt(struct tcp_sock *ts, int level, int optname,
+		    const void *optval, uint32_t optlen)
+{
+	int err = 0;
+
+	if (!ts)
+		return EINVAL;
+
+	if (ts->fdc != BAD_SOCK) {
+		if (0 != setsockopt(ts->fdc, level, optname,
+				    BUF_CAST optval, optlen))
+			err |= ERRNO_SOCK;
+	}
+
+	if (ts->fd != BAD_SOCK) {
+		if (0 != setsockopt(ts->fd, level, optname,
+				    BUF_CAST optval, optlen))
+			err |= ERRNO_SOCK;
+	}
+
+	return err;
 }
 
 
@@ -494,14 +528,14 @@ static void tcp_conn_handler(int flags, void *arg)
 
 	sa_init(&peer, AF_UNSPEC);
 
-	if (ts->fdc >= 0)
+	if (ts->fdc != BAD_SOCK)
 		(void)close(ts->fdc);
 
-	ts->fdc = SOK_CAST accept(ts->fd, &peer.u.sa, &peer.len);
-	if (-1 == ts->fdc) {
+	ts->fdc = accept(ts->fd, &peer.u.sa, &peer.len);
+	if (ts->fdc == BAD_SOCK) {
 
 #if TARGET_OS_IPHONE
-		if (EAGAIN == errno) {
+		if (EAGAIN == ERRNO_SOCK) {
 
 			struct tcp_sock *ts_new;
 			struct sa laddr;
@@ -513,7 +547,7 @@ static void tcp_conn_handler(int flags, void *arg)
 			if (ts->fd >= 0) {
 				fd_close(ts->fd);
 				(void)close(ts->fd);
-				ts->fd = -1;
+				ts->fd = BAD_SOCK;
 			}
 
 			err = tcp_listen(&ts_new, &laddr, NULL, NULL);
@@ -521,7 +555,7 @@ static void tcp_conn_handler(int flags, void *arg)
 				return;
 
 			ts->fd = ts_new->fd;
-			ts_new->fd = -1;
+			ts_new->fd = BAD_SOCK;
 
 			mem_deref(ts_new);
 
@@ -536,7 +570,7 @@ static void tcp_conn_handler(int flags, void *arg)
 	if (err) {
 		DEBUG_WARNING("conn handler: nonblock set: %m\n", err);
 		(void)close(ts->fdc);
-		ts->fdc = -1;
+		ts->fdc = BAD_SOCK;
 		return;
 	}
 
@@ -573,8 +607,8 @@ int tcp_sock_alloc(struct tcp_sock **tsp, const struct sa *local,
 	if (!ts)
 		return ENOMEM;
 
-	ts->fd  = -1;
-	ts->fdc = -1;
+	ts->fd  = BAD_SOCK;
+	ts->fdc = BAD_SOCK;
 
 	if (local) {
 		(void)re_snprintf(addr, sizeof(addr), "%H",
@@ -603,14 +637,14 @@ int tcp_sock_alloc(struct tcp_sock **tsp, const struct sa *local,
 
 	err = EINVAL;
 	for (r = res; r; r = r->ai_next) {
-		int fd = -1;
+		re_sock_t fd = BAD_SOCK;
 
-		if (ts->fd >= 0)
+		if (ts->fd != BAD_SOCK)
 			continue;
 
-		fd = SOK_CAST socket(r->ai_family, SOCK_STREAM, IPPROTO_TCP);
-		if (fd < 0) {
-			err = errno;
+		fd = socket(r->ai_family, SOCK_STREAM, IPPROTO_TCP);
+		if (fd == BAD_SOCK) {
+			err = ERRNO_SOCK;
 			continue;
 		}
 
@@ -633,7 +667,7 @@ int tcp_sock_alloc(struct tcp_sock **tsp, const struct sa *local,
 
 	freeaddrinfo(res);
 
-	if (-1 == ts->fd)
+	if (ts->fd == BAD_SOCK)
 		goto out;
 
 	ts->connh = ch;
@@ -667,10 +701,10 @@ struct tcp_sock *tcp_sock_dup(struct tcp_sock *tso)
 	if (!ts)
 		return NULL;
 
-	ts->fd  = -1;
+	ts->fd  = BAD_SOCK;
 	ts->fdc = tso->fdc;
 
-	tso->fdc = -1;
+	tso->fdc = BAD_SOCK;
 
 	return ts;
 }
@@ -691,7 +725,7 @@ int tcp_sock_bind(struct tcp_sock *ts, const struct sa *local)
 	char serv[NI_MAXSERV] = "0";
 	int error, err;
 
-	if (!ts || ts->fd<0)
+	if (!ts || ts->fd == BAD_SOCK)
 		return EINVAL;
 
 	if (local) {
@@ -722,7 +756,7 @@ int tcp_sock_bind(struct tcp_sock *ts, const struct sa *local)
 	for (r = res; r; r = r->ai_next) {
 
 		if (bind(ts->fd, r->ai_addr, SIZ_CAST r->ai_addrlen) < 0) {
-			err = errno;
+			err = ERRNO_SOCK;
 			DEBUG_WARNING("sock_bind: bind: %m (af=%d, %J)\n",
 				      err, r->ai_family, local);
 			continue;
@@ -754,13 +788,13 @@ int tcp_sock_listen(struct tcp_sock *ts, int backlog)
 	if (!ts)
 		return EINVAL;
 
-	if (ts->fd < 0) {
+	if (ts->fd == BAD_SOCK) {
 		DEBUG_WARNING("sock_listen: invalid fd\n");
 		return EBADF;
 	}
 
 	if (listen(ts->fd, backlog) < 0) {
-		err = errno;
+		err = ERRNO_SOCK;
 		DEBUG_WARNING("sock_listen: listen(): %m\n", err);
 		return err;
 	}
@@ -787,7 +821,7 @@ int tcp_accept(struct tcp_conn **tcp, struct tcp_sock *ts, tcp_estab_h *eh,
 	struct tcp_conn *tc;
 	int err;
 
-	if (!tcp || !ts || ts->fdc < 0)
+	if (!tcp || !ts || ts->fdc == BAD_SOCK)
 		return EINVAL;
 
 	tc = conn_alloc(eh, rh, ch, arg);
@@ -796,7 +830,7 @@ int tcp_accept(struct tcp_conn **tcp, struct tcp_sock *ts, tcp_estab_h *eh,
 
 	/* Transfer ownership to TCP connection */
 	tc->fdc = ts->fdc;
-	ts->fdc = -1;
+	ts->fdc = BAD_SOCK;
 
 	err = fd_listen(tc->fdc, FD_READ | FD_WRITE | FD_EXCEPT,
 			tcp_recv_handler, tc);
@@ -823,9 +857,9 @@ void tcp_reject(struct tcp_sock *ts)
 	if (!ts)
 		return;
 
-	if (ts->fdc >= 0) {
+	if (ts->fdc != BAD_SOCK) {
 		(void)close(ts->fdc);
-		ts->fdc = -1;
+		ts->fdc = BAD_SOCK;
 	}
 }
 
@@ -881,10 +915,10 @@ int tcp_conn_alloc(struct tcp_conn **tcp,
 	err = EINVAL;
 	for (r = res; r; r = r->ai_next) {
 
-		tc->fdc = SOK_CAST socket(r->ai_family, SOCK_STREAM,
+		tc->fdc = socket(r->ai_family, SOCK_STREAM,
 					  IPPROTO_TCP);
-		if (tc->fdc < 0) {
-			err = errno;
+		if (tc->fdc == BAD_SOCK) {
+			err = ERRNO_SOCK;
 			continue;
 		}
 
@@ -892,7 +926,7 @@ int tcp_conn_alloc(struct tcp_conn **tcp,
 		if (err) {
 			DEBUG_WARNING("connect: nonblock set: %m\n", err);
 			(void)close(tc->fdc);
-			tc->fdc = -1;
+			tc->fdc = BAD_SOCK;
 			continue;
 		}
 
@@ -959,13 +993,14 @@ int tcp_conn_bind(struct tcp_conn *tc, const struct sa *local)
 
 		/* bind to local address */
 		if (bind(tc->fdc, r->ai_addr, SIZ_CAST r->ai_addrlen) < 0) {
+			err = ERRNO_SOCK;
 
 			/* Special case for mingw32/wine */
-			if (0 == errno) {
+			/* @TODO: is this needed anymore? */
+			if (0 == err) {
 				goto ok;
 			}
 
-			err = errno;
 			DEBUG_WARNING("conn_bind: bind(): %J: %m\n",
 				      local, err);
 			continue;
@@ -1007,7 +1042,7 @@ int tcp_conn_connect(struct tcp_conn *tc, const struct sa *peer)
 
 	tc->active = true;
 
-	if (tc->fdc < 0) {
+	if (tc->fdc == BAD_SOCK) {
 		DEBUG_WARNING("invalid fd\n");
 		return EBADF;
 	}
@@ -1039,25 +1074,24 @@ int tcp_conn_connect(struct tcp_conn *tc, const struct sa *peer)
 			goto out;
 		}
 		else {
+			err = ERRNO_SOCK;
 #ifdef WIN32
 			/* Special error handling for Windows */
-			if (WSAEWOULDBLOCK == WSAGetLastError()) {
+			if (WSAEWOULDBLOCK == err) {
 				err = 0;
 				goto out;
 			}
 #endif
 
 			/* Special case for mingw32/wine */
-			if (0 == errno) {
-				err = 0;
+			if (0 == err) {
 				goto out;
 			}
 
-			if (EINTR == errno)
+			if (EINTR == err)
 				goto again;
 
-			if (EINPROGRESS != errno && EALREADY != errno) {
-				err = errno;
+			if (EINPROGRESS != err && EALREADY != err) {
 				DEBUG_INFO("connect: connect() %J: %m\n",
 					   peer, err);
 			}
@@ -1086,7 +1120,7 @@ static int tcp_send_internal(struct tcp_conn *tc, struct mbuf *mb,
 	const int flags = 0;
 #endif
 
-	if (tc->fdc < 0)
+	if (tc->fdc == BAD_SOCK)
 		return ENOTCONN;
 
 	if (!mbuf_get_left(mb)) {
@@ -1108,23 +1142,20 @@ static int tcp_send_internal(struct tcp_conn *tc, struct mbuf *mb,
 	if (tc->sendq.head)
 		return enqueue(tc, mb);
 
-	n = send(tc->fdc, BUF_CAST mbuf_buf(mb), mb->end - mb->pos, flags);
+	n = send(tc->fdc, BUF_CAST mbuf_buf(mb),
+		 SIZ_CAST (mb->end - mb->pos), flags);
 	if (n < 0) {
+		err = ERRNO_SOCK;
 
-		if (EAGAIN == errno)
+		if (err == EAGAIN)
 			return enqueue(tc, mb);
 
 #ifdef WIN32
-		if (WSAEWOULDBLOCK == WSAGetLastError())
+		if (err == WSAEWOULDBLOCK)
 			return enqueue(tc, mb);
 #endif
-		err = errno;
 
 		DEBUG_WARNING("send: write(): %m (fdc=%d)\n", err, tc->fdc);
-
-#ifdef WIN32
-		DEBUG_WARNING("WIN32 error: %d\n", WSAGetLastError());
-#endif
 
 		return err;
 	}
@@ -1234,17 +1265,20 @@ void tcp_set_handlers(struct tcp_conn *tc, tcp_estab_h *eh, tcp_recv_h *rh,
  */
 int tcp_sock_local_get(const struct tcp_sock *ts, struct sa *local)
 {
+	int err;
+
 	if (!ts || !local)
 		return EINVAL;
 
 	sa_init(local, AF_UNSPEC);
+	err = getsockname(ts->fd, &local->u.sa, &local->len);
 
-	if (getsockname(ts->fd, &local->u.sa, &local->len) < 0) {
-		DEBUG_WARNING("local get: getsockname(): %m\n", errno);
-		return errno;
+	if (err < 0) {
+		err = ERRNO_SOCK;
+		DEBUG_WARNING("local get: getsockname(): %m\n", err);
 	}
 
-	return 0;
+	return err;
 }
 
 
@@ -1258,17 +1292,20 @@ int tcp_sock_local_get(const struct tcp_sock *ts, struct sa *local)
  */
 int tcp_conn_local_get(const struct tcp_conn *tc, struct sa *local)
 {
+	int err;
+
 	if (!tc || !local)
 		return EINVAL;
 
 	sa_init(local, AF_UNSPEC);
+	err = getsockname(tc->fdc, &local->u.sa, &local->len);
 
-	if (getsockname(tc->fdc, &local->u.sa, &local->len) < 0) {
-		DEBUG_WARNING("conn local get: getsockname(): %m\n", errno);
-		return errno;
+	if (err < 0) {
+		err = ERRNO_SOCK;
+		DEBUG_WARNING("conn local get: getsockname(): %m\n", err);
 	}
 
-	return 0;
+	return err;
 }
 
 
@@ -1282,17 +1319,20 @@ int tcp_conn_local_get(const struct tcp_conn *tc, struct sa *local)
  */
 int tcp_conn_peer_get(const struct tcp_conn *tc, struct sa *peer)
 {
+	int err;
+
 	if (!tc || !peer)
 		return EINVAL;
 
 	sa_init(peer, AF_UNSPEC);
+	err = getpeername(tc->fdc, &peer->u.sa, &peer->len);
 
-	if (getpeername(tc->fdc, &peer->u.sa, &peer->len) < 0) {
-		DEBUG_WARNING("conn peer get: getpeername(): %m\n", errno);
-		return errno;
+	if (err < 0) {
+		err = ERRNO_SOCK;
+		DEBUG_WARNING("conn peer get: getpeername(): %m\n", err);
 	}
 
-	return 0;
+	return err;
 }
 
 
@@ -1335,7 +1375,7 @@ void tcp_conn_txqsz_set(struct tcp_conn *tc, size_t txqsz)
  */
 int tcp_conn_fd(const struct tcp_conn *tc)
 {
-	return tc ? tc->fdc : -1;
+	return tc ? tc->fdc : BAD_SOCK;
 }
 
 
@@ -1402,4 +1442,38 @@ int tcp_register_helper(struct tcp_helper **thp, struct tcp_conn *tc,
 		*thp = th;
 
 	return 0;
+}
+
+
+int tcp_settos(struct tcp_sock *ts, uint32_t tos)
+{
+	int err = 0;
+	int v = tos;
+
+	if (!ts)
+		return EINVAL;
+
+	ts->tos = tos;
+	err = tcp_sock_setopt(ts, IPPROTO_IP, IP_TOS, &v, sizeof(v));
+
+	return err;
+}
+
+
+int tcp_conn_settos(struct tcp_conn *tc, uint32_t tos)
+{
+	int err = 0;
+	int v = tos;
+
+	if (!tc)
+		return EINVAL;
+
+	tc->tos = tos;
+	if (tc->fdc != BAD_SOCK) {
+		if (0 != setsockopt(tc->fdc, IPPROTO_IP, IP_TOS,
+					BUF_CAST &v, sizeof(v)))
+			err = ERRNO_SOCK;
+	}
+
+	return err;
 }

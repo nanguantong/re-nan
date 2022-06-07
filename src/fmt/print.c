@@ -163,7 +163,7 @@ static size_t local_ftoa(char *buf, double n, size_t dp)
 int re_vhprintf(const char *fmt, va_list ap, re_vprintf_h *vph, void *arg)
 {
 	uint8_t base, *bptr;
-	char pch, ch, num[NUM_SIZE], addr[64], msg[256];
+	char pch = 0, ch, num[NUM_SIZE], addr[64], msg[256];
 	enum length_modifier lenmod = LENMOD_NONE;
 	struct re_printf pf;
 	bool fm = false, plr = false;
@@ -326,7 +326,7 @@ int re_vhprintf(const char *fmt, va_list ap, re_vprintf_h *vph, void *arg)
 			ptr = va_arg(ap, void *);
 
 			if (ptr) {
-				len = local_itoa(num, (unsigned long int)ptr,
+				len = local_itoa(num, (uint64_t)ptr,
 						 16, false);
 				err |= write_padded(num, len, pad,
 						    plr ? ' ' : pch, plr,

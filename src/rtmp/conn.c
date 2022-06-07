@@ -575,7 +575,7 @@ static int server_handle_packet(struct rtmp_conn *conn, struct mbuf *mb)
 static void tcp_recv_handler(struct mbuf *mb_pkt, void *arg)
 {
 	struct rtmp_conn *conn = arg;
-	int err;
+	int err = 0;
 
 	conn->total_bytes += mbuf_get_left(mb_pkt);
 
@@ -938,13 +938,13 @@ int rtmp_accept(struct rtmp_conn **connp, struct tcp_sock *ts,
 	if (err)
 		goto out;
 
-#ifdef USE_TLS
 	if (tls) {
+#ifdef USE_TLS
 		err = tls_start_tcp(&conn->sc, tls, conn->tc, 0);
 		if (err)
 			goto out;
-	}
 #endif
+	}
 
  out:
 	if (err)

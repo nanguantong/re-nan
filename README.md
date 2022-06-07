@@ -3,10 +3,13 @@ libre README
 
 
 libre is a Generic library for real-time communications with async IO support.
-Copyright (C) 2010 - 2019 Creytiv.com
 
+- Copyright (C) 2010 - 2020 Creytiv.com
+- Copyright (C) 2020 - 2022 Baresip Foundation (https://github.com/baresip)
 
-[![Build Status](https://travis-ci.org/creytiv/re.svg?branch=master)](https://travis-ci.org/creytiv/re)
+![Build](https://github.com/baresip/re/workflows/Build/badge.svg)
+![ccheck](https://github.com/baresip/re/workflows/ccheck/badge.svg)
+![OpenSSL no-deprecated and LibreSSL](https://github.com/baresip/re/workflows/OpenSSL%20no-deprecated%20and%20LibreSSL/badge.svg)
 
 
 ## Features
@@ -41,6 +44,16 @@ $ sudo make install
 $ sudo ldconfig
 ```
 
+On some distributions, /usr/local/lib may not be included in ld.so.conf. 
+You can check with `grep "/usr/local/lib" /etc/ld.so.conf.d/*.conf` 
+and add if necessary:
+
+```
+$ echo "/usr/local/lib" | sudo tee /etc/ld.so.conf.d/libc.conf
+$ sudo ldconfig
+```
+
+
 ### Build with release
 
 ```
@@ -58,13 +71,6 @@ $ sudo ldconfig
 ```
 
 
-## Documentation
-
-The online documentation generated with doxygen is available in
-the main [website](http://creytiv.com/doxygen/re-dox/html/)
-
-
-
 ### Examples
 
 Coding examples are available from the
@@ -79,15 +85,12 @@ The libre project is using the BSD license.
 ## Contributing
 
 Patches can sent via Github
-[Pull-Requests](https://github.com/creytiv/re/pulls) or to the RE devel
-[mailing-list](http://lists.creytiv.com/mailman/listinfo/re-devel).
-Currently we only accept small patches.
-Please send private feedback to libre [at] creytiv.com
+[Pull-Requests](https://github.com/baresip/re/pulls)
 
 
 ## Design goals
 
-* Portable POSIX source code (ANSI C89 and ISO C99 standard)
+* Portable POSIX source code (ISO C99 and C11 standard)
 * Robust, fast, low memory footprint
 * RFC compliance
 * IPv4 and IPv6 support
@@ -97,53 +100,54 @@ Please send private feedback to libre [at] creytiv.com
 
 | Name     | Status   | Description                                    |
 |----------|----------|------------------------------------------------|
-| aes      | unstable | AES (Advanced Encryption Standard)             |
-| base64   | testing  | Base-64 encoding/decoding functions            |
-| bfcp     | unstable | The Binary Floor Control Protocol (BFCP)       |
-| conf     | testing  | Configuration file parser                      |
-| crc32    | testing  | 32-bit CRC defined in ITU V.42                 |
-| dbg      | testing  | Debug printing                                 |
+| aes      | stable   | AES (Advanced Encryption Standard)             |
+| base64   | stable   | Base-64 encoding/decoding functions            |
+| bfcp     | stable   | The Binary Floor Control Protocol (BFCP)       |
+| conf     | stable   | Configuration file parser                      |
+| crc32    | stable   | 32-bit CRC defined in ITU V.42                 |
+| dbg      | stable   | Debug printing                                 |
 | dns      | stable   | DNS resolving (NAPTR, SRV, A)                  |
-| fmt      | testing  | Formatted printing and regular expression      |
-| hash     | testing  | Hashmap table                                  |
-| hmac     | testing  | HMAC: Keyed-Hashing for Message Authentication |
-| http     | unstable | HTTP parser (RFC 2616)                         |
-| httpauth | testing  | HTTP-based Authentication (RFC 2617)           |
-| ice      | unstable | Interactive Connectivity Establishment (ICE)   |
-| jbuf     | testing  | Jitter buffer                                  |
-| json     | unstable | JavaScript Object Notation (JSON)              |
+| fmt      | stable   | Formatted printing and regular expression      |
+| hash     | stable   | Hashmap table                                  |
+| hmac     | stable   | HMAC: Keyed-Hashing for Message Authentication |
+| http     | stable   | HTTP parser (RFC 2616)                         |
+| httpauth | stable   | HTTP-based Authentication (RFC 2617)           |
+| ice      | stable   | Interactive Connectivity Establishment (ICE)   |
+| jbuf     | stable   | Jitter buffer                                  |
+| json     | stable   | JavaScript Object Notation (JSON)              |
 | list     | stable   | Sortable doubly-linked list handling           |
-| lock     | testing  | Resource locking functions                     |
-| main     | testing  | Main poll loop                                 |
+| lock     | stable   | Resource locking functions                     |
+| main     | stable   | Main poll loop                                 |
 | mbuf     | stable   | Linear memory buffers                          |
 | md5      | stable   | The MD5 Message-Digest Algorithm (RFC 1321)    |
 | mem      | stable   | Memory referencing                             |
-| mod      | testing  | Run-time module loading                        |
-| mqueue   | testing  | Thread-safe message queue                      |
-| msg      | unstable | Generic message component library              |
-| natbd    | unstable | NAT Behavior Discovery using STUN              |
-| net      | testing  | Networking routines                            |
-| odict    | unstable | Ordered Dictionary                             |
-| rtmp     | unstable | Real Time Messaging Protocol                   |
-| rtp      | testing  | Real-time Transport Protocol                   |
+| mod      | stable   | Run-time module loading                        |
+| mqueue   | stable   | Thread-safe message queue                      |
+| msg      | stable   | Generic message component library              |
+| net      | stable   | Networking routines                            |
+| odict    | stable   | Ordered Dictionary                             |
+| rtmp     | stable   | Real Time Messaging Protocol                   |
+| rtp      | stable   | Real-time Transport Protocol                   |
 | sa       | stable   | Socket Address functions                       |
-| sdp      | testing  | Session Description Protocol                   |
-| sha      | testing  | Secure Hash Standard, NIST, FIPS PUB 180-1     |
+| sdp      | stable   | Session Description Protocol                   |
+| sha      | stable   | Secure Hash Standard, NIST, FIPS PUB 180-1     |
 | sip      | stable   | Core SIP library                               |
-| sipevent | testing  | SIP Event framework                            |
+| sipevent | stable   | SIP Event framework                            |
 | sipreg   | stable   | SIP register client                            |
 | sipsess  | stable   | SIP Sessions                                   |
-| srtp     | unstable | Secure Real-time Transport Protocol (SRTP)     |
+| srtp     | stable   | Secure Real-time Transport Protocol (SRTP)     |
 | stun     | stable   | Session Traversal Utilities for NAT (STUN)     |
-| sys      | testing  | System information                             |
-| tcp      | testing  | TCP transport                                  |
-| telev    | testing  | Telephony Events (RFC 4733)                    |
-| tls      | unstable | Transport Layer Security                       |
+| sys      | stable   | System information                             |
+| tcp      | stable   | TCP transport                                  |
+| telev    | stable   | Telephony Events (RFC 4733)                    |
+| thread   | testing  | C11 threads (with pthread and win32 emulation) |
+| tls      | stable   | Transport Layer Security                       |
 | tmr      | stable   | Timer handling                                 |
 | turn     | stable   | Obtaining Relay Addresses from STUN (TURN)     |
-| udp      | testing  | UDP transport                                  |
-| uri      | testing  | Generic URI library                            |
-| websock  | unstable | WebSocket Client and Server                    |
+| udp      | stable   | UDP transport                                  |
+| uri      | stable   | Generic URI library                            |
+| websock  | stable   | WebSocket Client and Server                    |
+| trace    | testing  | Trace Helpers JSON traces (chrome://tracing)   |
 
 legend:
 * *stable* - code complete; stable code and stable API
@@ -205,14 +209,31 @@ legend:
 
 ## Supported platforms
 
-* Linux
-* FreeBSD
-* OpenBSD
-* NetBSD
-* Solaris 11
-* Windows
-* Apple Mac OS X and iOS
-* Android (5.0 or later)
+|  System | Support type | Supported versions | Notes |
+|---|---|---|---|
+| Linux | Tier 1 | glibc >= 2.17 (CentOS 7) | |
+| macOS | Tier 1 | macOS >= 10.10 | |
+| Windows | Tier 1 | >= Windows 8 | MinGW-w64 |
+| Android | Tier 2 | | |
+| iOS | Tier 2 | | |
+| FreeBSD | Tier 2 | >= 11 | |
+| OpenBSD | Tier 2 | >= 6.7 | |
+| Linux | Tier 2 | uClibc | |
+| Windows | Tier 3 | | e.g. VS 2015 |
+
+
+### Support types
+
+* **Tier 1**: Officially supported and tested with CI. Any contributed patch
+  MUST NOT break such systems.
+
+* **Tier 2**: Officially supported, but not necessarily tested with CI. These
+  systems are maintained to the best of collaborators ability, without being
+  a top priority.
+
+* **Tier 3**: Community maintained. These systems may inadvertently break and the
+  community and interested parties are expected to help with the maintenance.
+
 
 ### Supported versions of C Standard library
 
@@ -225,20 +246,17 @@ legend:
 
 ### Supported compilers:
 
-* gcc 3.x
-* gcc 4.x
-* gcc 5.x
-* gcc 6.x
-* ms vc2003 compiler
-* clang
+* gcc 4.9 or later
+* MSVC 2019
+* clang 3.x or later
+
 
 ### Supported versions of OpenSSL
 
-* OpenSSL version 1.0.1 (Not supported)
-* OpenSSL version 1.0.2
 * OpenSSL version 1.1.0
 * OpenSSL version 1.1.1
-* LibreSSL version 2.x
+* OpenSSL version 3.0.x
+* LibreSSL version 3.x
 
 
 ## Coding guidelines
@@ -277,18 +295,11 @@ legend:
 
 ## Related projects
 
-* [librem](https://github.com/creytiv/rem)
-* [retest](https://github.com/creytiv/retest)
-* [baresip](https://github.com/alfredh/baresip)
-* [restund](http://creytiv.com/restund.html)
-
+* [librem](https://github.com/baresip/rem)
+* [retest](https://github.com/baresip/retest)
+* [baresip](https://github.com/baresip/baresip)
 
 
 ## References
 
-http://creytiv.com/re.html
-
 https://github.com/creytiv/re
-
-http://lists.creytiv.com/mailman/listinfo/re-devel
-

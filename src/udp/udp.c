@@ -27,11 +27,19 @@
 #include <re_mem.h>
 #include <re_mbuf.h>
 #include <re_list.h>
+#include <re_net.h>
 #include <re_main.h>
 #include <re_sa.h>
-#include <re_net.h>
 #include <re_udp.h>
-
+#ifdef WIN32
+#if !defined(_MSC_VER)
+typedef UINT32 QOS_FLOWID, *PQOS_FLOWID;
+#ifndef QOS_NON_ADAPTIVE_FLOW
+#define QOS_NON_ADAPTIVE_FLOW 0x00000002
+#endif
+#endif /*!_MSC_VER*/
+#include <qos2.h>
+#endif /*WIN32*/
 
 #define DEBUG_MODULE "udp"
 #define DEBUG_LEVEL 5
@@ -41,12 +49,10 @@
 /** Platform independent buffer type cast */
 #ifdef WIN32
 #define BUF_CAST (char *)
-#define SOK_CAST (int)
 #define SIZ_CAST (int)
 #define close closesocket
 #else
 #define BUF_CAST
-#define SOK_CAST
 #define SIZ_CAST
 #endif
 
@@ -62,11 +68,16 @@ struct udp_sock {
 	udp_recv_h *rh;      /**< Receive handler             */
 	udp_error_h *eh;     /**< Error handler               */
 	void *arg;           /**< Handler argument            */
-	int fd;              /**< Socket file descriptor      */
-	int fd6;             /**< IPv6 socket file descriptor */
+	re_sock_t fd;        /**< Socket file descriptor      */
+	re_sock_t fd6;       /**< IPv6 socket file descriptor */
 	bool conn;           /**< Connected socket flag       */
 	size_t rxsz;         /**< Maximum receive chunk size  */
 	size_t rx_presz;     /**< Preallocated rx buffer size */
+#ifdef WIN32
+	HANDLE qos;          /**< QOS subsystem handle        */
+	QOS_FLOWID qos_id;   /**< QOS IPv4 flow id            */
+	QOS_FLOWID qos_id6;  /**< QOS IPv6 flow id            */
+#endif
 };
 
 /** Defines a UDP helper */
@@ -115,19 +126,28 @@ static void udp_destructor(void *data)
 
 	list_flush(&us->helpers);
 
-	if (-1 != us->fd) {
+#ifdef WIN32
+	if (us->qos && us->qos_id)
+		(void)QOSRemoveSocketFromFlow(us->qos, 0, us->qos_id, 0);
+	if (us->qos && us->qos_id6)
+		(void)QOSRemoveSocketFromFlow(us->qos, 0, us->qos_id6, 0);
+	if (us->qos)
+		(void)QOSCloseHandle(us->qos);
+#endif
+
+	if (BAD_SOCK != us->fd) {
 		fd_close(us->fd);
 		(void)close(us->fd);
 	}
 
-	if (-1 != us->fd6) {
+	if (BAD_SOCK != us->fd6) {
 		fd_close(us->fd6);
 		(void)close(us->fd6);
 	}
 }
 
 
-static void udp_read(struct udp_sock *us, int fd)
+static void udp_read(struct udp_sock *us, re_sock_t fd)
 {
 	struct mbuf *mb = mbuf_alloc(us->rxsz);
 	struct sa src;
@@ -140,15 +160,20 @@ static void udp_read(struct udp_sock *us, int fd)
 
 	src.len = sizeof(src.u);
 	n = recvfrom(fd, BUF_CAST mb->buf + us->rx_presz,
-		     mb->size - us->rx_presz, 0,
+		     SIZ_CAST (mb->size - us->rx_presz), 0,
 		     &src.u.sa, &src.len);
 	if (n < 0) {
-		err = errno;
+		err = ERRNO_SOCK;
 
 		if (EAGAIN == err)
 			goto out;
 
-#ifdef EWOULDBLOCK
+#ifdef WIN32
+		if (WSAEWOULDBLOCK == err)
+			goto out;
+#endif
+
+#if defined (EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
 		if (EWOULDBLOCK == err)
 			goto out;
 #endif
@@ -163,16 +188,16 @@ static void udp_read(struct udp_sock *us, int fd)
 			if (err)
 				goto out;
 
-			if (-1 != us->fd) {
+			if (BAD_SOCK != us->fd) {
 				fd_close(us->fd);
 				(void)close(us->fd);
-				us->fd = -1;
+				us->fd = BAD_SOCK;
 			}
 
-			if (-1 != us->fd6) {
+			if (BAD_SOCK != us->fd6) {
 				fd_close(us->fd6);
 				(void)close(us->fd6);
-				us->fd6 = -1;
+				us->fd6 = BAD_SOCK;
 			}
 
 			err = udp_listen(&us_new, &laddr, NULL, NULL);
@@ -182,8 +207,8 @@ static void udp_read(struct udp_sock *us, int fd)
 			us->fd  = us_new->fd;
 			us->fd6 = us_new->fd6;
 
-			us_new->fd  = -1;
-			us_new->fd6 = -1;
+			us_new->fd  = BAD_SOCK;
+			us_new->fd6 = BAD_SOCK;
 
 			mem_deref(us_new);
 
@@ -258,7 +283,7 @@ int udp_listen(struct udp_sock **usp, const struct sa *local,
 {
 	struct addrinfo hints, *res = NULL, *r;
 	struct udp_sock *us = NULL;
-	char addr[64];
+	char addr[64] = {0};
 	char serv[6] = "0";
 	int af, error, err = 0;
 
@@ -271,8 +296,8 @@ int udp_listen(struct udp_sock **usp, const struct sa *local,
 
 	list_init(&us->helpers);
 
-	us->fd  = -1;
-	us->fd6 = -1;
+	us->fd  = BAD_SOCK;
+	us->fd6 = BAD_SOCK;
 
 	if (local) {
 		af = sa_af(local);
@@ -308,17 +333,17 @@ int udp_listen(struct udp_sock **usp, const struct sa *local,
 	}
 
 	for (r = res; r; r = r->ai_next) {
-		int fd = -1;
+		re_sock_t fd;
 
-		if (us->fd > 0)
+		if (us->fd != BAD_SOCK)
 			continue;
 
 		DEBUG_INFO("listen: for: af=%d addr=%j\n",
 			   r->ai_family, r->ai_addr);
 
-		fd = SOK_CAST socket(r->ai_family, SOCK_DGRAM, IPPROTO_UDP);
-		if (fd < 0) {
-			err = errno;
+		fd = socket(r->ai_family, SOCK_DGRAM, IPPROTO_UDP);
+		if (fd == BAD_SOCK) {
+			err = ERRNO_SOCK;
 			continue;
 		}
 
@@ -330,7 +355,7 @@ int udp_listen(struct udp_sock **usp, const struct sa *local,
 		}
 
 		if (bind(fd, r->ai_addr, SIZ_CAST r->ai_addrlen) < 0) {
-			err = errno;
+			err = ERRNO_SOCK;
 			DEBUG_INFO("listen: bind(): %m (%J)\n", err, local);
 			(void)close(fd);
 			continue;
@@ -367,7 +392,7 @@ int udp_listen(struct udp_sock **usp, const struct sa *local,
 	freeaddrinfo(res);
 
 	/* We must have at least one socket */
-	if (-1 == us->fd && -1 == us->fd6) {
+	if (BAD_SOCK == us->fd && BAD_SOCK == us->fd6) {
 		if (0 == err)
 			err = EADDRNOTAVAIL;
 		goto out;
@@ -392,6 +417,51 @@ int udp_listen(struct udp_sock **usp, const struct sa *local,
 
 
 /**
+ * Create an UDP socket with specified address family.
+ *
+ * @param usp   Pointer to returned UDP Socket
+ * @param af    Address family AF_INET or AF_INET6
+ *
+ * @return 0 if success, otherwise errorcode
+ */
+int udp_open(struct udp_sock **usp, int af)
+{
+	struct udp_sock *us = NULL;
+	int err = 0;
+	re_sock_t fd;
+
+	if (!usp)
+		return EINVAL;
+
+	us = mem_zalloc(sizeof(*us), udp_destructor);
+	if (!us)
+		return ENOMEM;
+
+	us->fd  = BAD_SOCK;
+	us->fd6 = BAD_SOCK;
+
+	fd = socket(af, SOCK_DGRAM, IPPROTO_UDP);
+	if (fd == BAD_SOCK) {
+		err = ERRNO_SOCK;
+		goto out;
+	}
+
+	if (af == AF_INET)
+		us->fd = fd;
+	else
+		us->fd6 = fd;
+
+ out:
+	if (err)
+		mem_deref(us);
+	else
+		*usp = us;
+
+	return err;
+}
+
+
+/**
  * Connect a UDP Socket to a specific peer.
  * When connected, this UDP Socket will only receive data from that peer.
  *
@@ -402,19 +472,19 @@ int udp_listen(struct udp_sock **usp, const struct sa *local,
  */
 int udp_connect(struct udp_sock *us, const struct sa *peer)
 {
-	int fd;
+	re_sock_t fd;
 
 	if (!us || !peer)
 		return EINVAL;
 
 	/* choose a socket */
-	if (AF_INET6 == sa_af(peer) && -1 != us->fd6)
+	if (AF_INET6 == sa_af(peer) && BAD_SOCK != us->fd6)
 		fd = us->fd6;
 	else
 		fd = us->fd;
 
 	if (0 != connect(fd, &peer->u.sa, peer->len))
-		return errno;
+		return ERRNO_SOCK;
 
 	us->conn = true;
 
@@ -426,10 +496,11 @@ static int udp_send_internal(struct udp_sock *us, const struct sa *dst,
 			     struct mbuf *mb, struct le *le)
 {
 	struct sa hdst;
-	int err = 0, fd;
+	int err = 0;
+	re_sock_t fd;
 
 	/* choose a socket */
-	if (AF_INET6 == sa_af(dst) && -1 != us->fd6)
+	if (AF_INET6 == sa_af(dst) && BAD_SOCK != us->fd6)
 		fd = us->fd6;
 	else
 		fd = us->fd;
@@ -451,14 +522,16 @@ static int udp_send_internal(struct udp_sock *us, const struct sa *dst,
 
 	/* Connected socket? */
 	if (us->conn) {
-		if (send(fd, BUF_CAST mb->buf + mb->pos, mb->end - mb->pos,
+		if (send(fd, BUF_CAST mb->buf + mb->pos,
+			 SIZ_CAST (mb->end - mb->pos),
 			 0) < 0)
-			return errno;
+			return ERRNO_SOCK;
 	}
 	else {
-		if (sendto(fd, BUF_CAST mb->buf + mb->pos, mb->end - mb->pos,
+		if (sendto(fd, BUF_CAST mb->buf + mb->pos,
+			   SIZ_CAST (mb->end - mb->pos),
 			   0, &dst->u.sa, dst->len) < 0)
-			return errno;
+			return ERRNO_SOCK;
 	}
 
 	return 0;
@@ -533,7 +606,7 @@ int udp_local_get(const struct udp_sock *us, struct sa *local)
 	if (0 == getsockname(us->fd6, &local->u.sa, &local->len))
 		return 0;
 
-	return errno;
+	return ERRNO_SOCK;
 }
 
 
@@ -556,16 +629,16 @@ int udp_setsockopt(struct udp_sock *us, int level, int optname,
 	if (!us)
 		return EINVAL;
 
-	if (-1 != us->fd) {
+	if (BAD_SOCK != us->fd) {
 		if (0 != setsockopt(us->fd, level, optname,
 				    BUF_CAST optval, optlen))
-			err |= errno;
+			err |= ERRNO_SOCK;
 	}
 
-	if (-1 != us->fd6) {
+	if (BAD_SOCK != us->fd6) {
 		if (0 != setsockopt(us->fd6, level, optname,
 				    BUF_CAST optval, optlen))
-			err |= errno;
+			err |= ERRNO_SOCK;
 	}
 
 	return err;
@@ -590,6 +663,57 @@ int udp_sockbuf_set(struct udp_sock *us, int size)
 	err |= udp_setsockopt(us, SOL_SOCKET, SO_RCVBUF, &size, sizeof(size));
 	err |= udp_setsockopt(us, SOL_SOCKET, SO_SNDBUF, &size, sizeof(size));
 
+	return err;
+}
+
+
+int udp_settos(struct udp_sock *us, uint8_t tos)
+{
+	int err = 0;
+	int v = tos;
+#ifdef WIN32
+	QOS_VERSION qos_version = { 1 , 0 };
+	QOS_TRAFFIC_TYPE qos_type = QOSTrafficTypeBestEffort;
+	if (tos >= 32) /* >= DSCP_CS1 */
+		qos_type = QOSTrafficTypeBackground;
+	if (tos >= 40) /* >= DSCP_AF11 */
+		qos_type = QOSTrafficTypeExcellentEffort;
+	if (tos >= 136) /* >= DSCP_AF41 */
+		qos_type = QOSTrafficTypeAudioVideo;
+	if (tos >= 184) /* >= DSCP_EF */
+		qos_type = QOSTrafficTypeVoice;
+	if (tos >= 224) /* >= DSCP_CS7 */
+		qos_type = QOSTrafficTypeControl;
+#endif
+	if (!us)
+		return EINVAL;
+
+#ifdef WIN32
+	err = QOSCreateHandle(&qos_version, &us->qos);
+	if (!err)
+		return GetLastError();
+
+	us->qos_id = 0;
+	if (BAD_SOCK != us->fd) {
+		err = QOSAddSocketToFlow(us->qos, us->fd, NULL,
+				qos_type,
+				QOS_NON_ADAPTIVE_FLOW,
+				&us->qos_id);
+		if (!err)
+			return WSAGetLastError();
+	}
+
+	us->qos_id6 = 0;
+	if (BAD_SOCK != us->fd6) {
+		err = QOSAddSocketToFlow(us->qos, us->fd6, NULL,
+				qos_type,
+				QOS_NON_ADAPTIVE_FLOW,
+				&us->qos_id6);
+		if (!err)
+			return WSAGetLastError();
+	}
+#endif
+	err = udp_setsockopt(us, IPPROTO_IP, IP_TOS, &v, sizeof(v));
 	return err;
 }
 
@@ -673,7 +797,7 @@ int udp_sock_fd(const struct udp_sock *us, int af)
 
 	default:
 	case AF_INET:  return us->fd;
-	case AF_INET6: return (us->fd6 != -1) ? us->fd6 : us->fd;
+	case AF_INET6: return (us->fd6 != BAD_SOCK) ? us->fd6 : us->fd;
 	}
 }
 
@@ -692,13 +816,13 @@ int udp_thread_attach(struct udp_sock *us)
 	if (!us)
 		return EINVAL;
 
-	if (-1 != us->fd) {
+	if (BAD_SOCK != us->fd) {
 		err = fd_listen(us->fd, FD_READ, udp_read_handler, us);
 		if (err)
 			goto out;
 	}
 
-	if (-1 != us->fd6) {
+	if (BAD_SOCK != us->fd6) {
 		err = fd_listen(us->fd6, FD_READ, udp_read_handler6, us);
 		if (err)
 			goto out;
@@ -722,10 +846,10 @@ void udp_thread_detach(struct udp_sock *us)
 	if (!us)
 		return;
 
-	if (-1 != us->fd)
+	if (BAD_SOCK != us->fd)
 		fd_close(us->fd);
 
-	if (-1 != us->fd6)
+	if (BAD_SOCK != us->fd6)
 		fd_close(us->fd6);
 }
 
@@ -810,6 +934,36 @@ int udp_send_helper(struct udp_sock *us, const struct sa *dst,
 }
 
 
+void udp_recv_helper(struct udp_sock *us, const struct sa *src,
+		     struct mbuf *mb, struct udp_helper *uhx)
+{
+	struct sa hsrc;
+	struct le *le;
+
+	if (!us || !src || !mb || !uhx)
+		return;
+
+	le = uhx->le.next;
+	while (le) {
+		struct udp_helper *uh = le->data;
+		bool hdld;
+
+		le = le->next;
+
+		if (src != &hsrc) {
+			sa_cpy(&hsrc, src);
+			src = &hsrc;
+		}
+
+		hdld = uh->recvh(&hsrc, mb, uh->arg);
+		if (hdld)
+			return;
+	}
+
+	us->rh(src, mb, us->arg);
+}
+
+
 /**
  * Find a UDP-helper on a UDP socket
  *
@@ -834,4 +988,32 @@ struct udp_helper *udp_helper_find(const struct udp_sock *us, int layer)
 	}
 
 	return NULL;
+}
+
+
+/**
+ * Flush a given UDP socket
+ *
+ * @param us UDP socket
+ */
+void udp_flush(const struct udp_sock *us)
+{
+	if (!us)
+		return;
+
+	if (BAD_SOCK != us->fd) {
+		uint8_t buf[4096];
+
+		while (recvfrom(us->fd, BUF_CAST buf, sizeof(buf),
+				0, NULL, 0) > 0)
+			;
+	}
+
+	if (BAD_SOCK != us->fd6) {
+		uint8_t buf[4096];
+
+		while (recvfrom(us->fd6, BUF_CAST buf, sizeof(buf),
+				0, NULL, 0) > 0)
+			;
+	}
 }

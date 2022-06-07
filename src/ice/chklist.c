@@ -33,7 +33,7 @@ static int candpairs_form(struct icem *icem)
 		return ENOENT;
 
 	if (list_isempty(&icem->rcandl)) {
-		DEBUG_WARNING("%s: no remote candidates\n", icem->name);
+		DEBUG_WARNING("form: '%s' no remote candidates\n", icem->name);
 		return ENOENT;
 	}
 
@@ -50,6 +50,12 @@ static int candpairs_form(struct icem *icem)
 				continue;
 
 			if (sa_af(&lcand->addr) != sa_af(&rcand->addr))
+				continue;
+
+			if (icem_candpair_find(&icem->checkl, lcand, rcand))
+				continue;
+
+			if (icem_candpair_find(&icem->validl, lcand, rcand))
 				continue;
 
 			err = icem_candpair_alloc(NULL, icem, lcand, rcand);
@@ -101,7 +107,7 @@ static void candpair_prune(struct icem *icem)
 
 	uint32_t n = ice_list_unique(&icem->checkl, unique_handler);
 	if (n > 0) {
-		DEBUG_NOTICE("%s: pruned candidate pairs: %u\n",
+		DEBUG_INFO("%s: pruned candidate pairs: %u\n",
 			     icem->name, n);
 	}
 }

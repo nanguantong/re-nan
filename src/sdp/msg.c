@@ -222,6 +222,9 @@ static int media_decode(struct sdp_media **mp, struct sdp_session *sess,
 
 	m->rdir = sess->rdir;
 
+	if (!pl_u32(&port))
+		m->rdir = SDP_INACTIVE;
+
 	*mp = m;
 
 	return 0;
@@ -351,7 +354,8 @@ static int media_encode(const struct sdp_media *m, struct mbuf *mb, bool offer)
 	enum sdp_bandwidth i;
 	const char *proto;
 	int err, supc = 0;
-	bool disabled;
+	bool disabled = false;
+	bool rejected = false;
 	struct le *le;
 	uint16_t port;
 
@@ -363,25 +367,29 @@ static int media_encode(const struct sdp_media *m, struct mbuf *mb, bool offer)
 			++supc;
 	}
 
-	if (m->uproto && !offer) {
+	/*disable if: local supported and (m->disabled or raddr port 0)*/
+	if (supc && (m->disabled || (!offer && !sa_port(&m->raddr)))) {
 		disabled = true;
-		port = 0;
-		proto = m->uproto;
-	}
-	else if (m->disabled || supc == 0 || (!offer && !sa_port(&m->raddr))) {
-		disabled = true;
-		port = 0;
+		port = sa_port(&m->laddr);
 		proto = m->proto;
 	}
+	/*reject if: not supported or not supported proto in the offer*/
+	else if (supc == 0 || (!offer && m->uproto)) {
+		rejected = true;
+		port = 0;
+		if (str_isset(m->uproto))
+			proto = m->uproto;
+		else
+			proto = m->proto;
+	}
+	/*everything works*/
 	else {
-		disabled = false;
 		port = sa_port(&m->laddr);
 		proto = m->proto;
 	}
 
 	err = mbuf_printf(mb, "m=%s %u %s", m->name, port, proto);
-
-	if (disabled) {
+	if (rejected) {
 		err |= mbuf_write_str(mb, " 0\r\n");
 		return err;
 	}
@@ -390,7 +398,7 @@ static int media_encode(const struct sdp_media *m, struct mbuf *mb, bool offer)
 
 		const struct sdp_format *fmt = le->data;
 
-		if (!fmt->sup)
+		if (!fmt->sup && !offer)
 			continue;
 
 		err |= mbuf_printf(mb, " %s", fmt->id);
@@ -416,7 +424,10 @@ static int media_encode(const struct sdp_media *m, struct mbuf *mb, bool offer)
 
 		const struct sdp_format *fmt = le->data;
 
-		if (!fmt->sup || !str_isset(fmt->name))
+		if (!str_isset(fmt->name))
+			continue;
+
+		if (!fmt->sup && !offer)
 			continue;
 
 		err |= mbuf_printf(mb, "a=rtpmap:%s %s/%u",
@@ -443,8 +454,9 @@ static int media_encode(const struct sdp_media *m, struct mbuf *mb, bool offer)
 		err |= mbuf_printf(mb, "a=rtcp:%u\r\n",
 				   sa_port(&m->laddr_rtcp));
 
-	err |= mbuf_printf(mb, "a=%s\r\n",
-			   sdp_dir_name(offer ? m->ldir : m->ldir & m->rdir));
+	err |= mbuf_printf(mb, "a=%s\r\n", disabled ?
+		sdp_dir_name(SDP_INACTIVE) :
+		sdp_dir_name(offer ? m->ldir : m->ldir & m->rdir));
 
 	for (le = m->lattrl.head; le; le = le->next)
 		err |= mbuf_printf(mb, "%H", sdp_attr_print, le->data);
@@ -467,7 +479,7 @@ static int media_encode(const struct sdp_media *m, struct mbuf *mb, bool offer)
  */
 int sdp_encode(struct mbuf **mbp, struct sdp_session *sess, bool offer)
 {
-	const int ipver = sa_af(&sess->laddr) == AF_INET ? 4 : 6;
+	int ipver;
 	enum sdp_bandwidth i;
 	struct mbuf *mb;
 	struct le *le;
@@ -480,6 +492,7 @@ int sdp_encode(struct mbuf **mbp, struct sdp_session *sess, bool offer)
 	if (!mb)
 		return ENOMEM;
 
+	ipver = sa_af(&sess->laddr) == AF_INET ? 4 : 6;
 	err  = mbuf_printf(mb, "v=%u\r\n", SDP_VERSION);
 	err |= mbuf_printf(mb, "o=- %u %u IN IP%d %j\r\n",
 			   sess->id, sess->ver++, ipver, &sess->laddr);

@@ -258,7 +258,7 @@ struct sdp_media *sdp_media_find(const struct sdp_session *sess,
  */
 void sdp_media_align_formats(struct sdp_media *m, bool offer)
 {
-	struct sdp_format *rfmt, *lfmt;
+	struct sdp_format *rfmt, *lfmt = NULL;
 	struct le *rle, *lle;
 
 	if (!m || m->disabled || !sa_port(&m->raddr) || m->fmt_ignore)
@@ -284,7 +284,7 @@ void sdp_media_align_formats(struct sdp_media *m, bool offer)
 				break;
 		}
 
-		if (!lle) {
+		if (!lle || !lfmt) {
 			rfmt->sup = false;
 			continue;
 		}
@@ -325,7 +325,7 @@ void sdp_media_align_formats(struct sdp_media *m, bool offer)
 
 			lle = lle->prev;
 
-			if (!lfmt->sup) {
+			if (lfmt && !lfmt->sup) {
 				list_unlink(&lfmt->le);
 				list_append(&m->lfmtl, &lfmt->le, lfmt);
 			}
@@ -421,6 +421,22 @@ void sdp_media_set_disabled(struct sdp_media *m, bool disabled)
 
 
 /**
+ * Check if an SDP Media line is disabled
+ *
+ * @param  m SDP Media line
+ * @return True if disabled, otherwise false
+
+ */
+bool sdp_media_disabled(struct sdp_media *m)
+{
+	if (!m)
+		return true;
+
+	return m->disabled;
+}
+
+
+/**
  * Set the local port number of an SDP Media line
  *
  * @param m    SDP Media line
@@ -460,7 +476,7 @@ void sdp_media_set_laddr(struct sdp_media *m, const struct sa *laddr)
 void sdp_media_set_lbandwidth(struct sdp_media *m, enum sdp_bandwidth type,
 			      int32_t bw)
 {
-	if (!m || type >= SDP_BANDWIDTH_MAX)
+	if (!m || type < SDP_BANDWIDTH_MIN || type >= SDP_BANDWIDTH_MAX)
 		return;
 
 	m->lbwv[type] = bw;
@@ -640,7 +656,7 @@ void sdp_media_raddr_rtcp(const struct sdp_media *m, struct sa *raddr)
 int32_t sdp_media_rbandwidth(const struct sdp_media *m,
 			      enum sdp_bandwidth type)
 {
-	if (!m || type >= SDP_BANDWIDTH_MAX)
+	if (!m || type < SDP_BANDWIDTH_MIN || type >= SDP_BANDWIDTH_MAX)
 		return 0;
 
 	return m->rbwv[type];
@@ -953,6 +969,12 @@ int sdp_media_debug(struct re_printf *pf, const struct sdp_media *m)
 
 	for (le=m->rattrl.head; le; le=le->next)
 		err |= re_hprintf(pf, "    %H\n", sdp_attr_debug, le->data);
+
+	err |= re_hprintf(pf, "  local direction:  %s\n",
+			sdp_dir_name(m->ldir));
+
+	err |= re_hprintf(pf, "  remote direction: %s\n",
+			sdp_dir_name(m->rdir));
 
 	return err;
 }

@@ -71,7 +71,7 @@ int srtcp_encrypt(struct srtp *srtp, struct mbuf *mb)
 		union vect128 iv;
 		uint8_t *p = mbuf_buf(mb);
 		uint8_t tag[GCM_TAGLEN];
-		const uint32_t ix_be = htonl(1<<31 | strm->rtcp_index);
+		const uint32_t ix_be = htonl(1L<<31 | strm->rtcp_index);
 
 		srtp_iv_calc_gcm(&iv, &rtcp->k_s, ssrc, strm->rtcp_index);
 
@@ -108,7 +108,7 @@ int srtcp_encrypt(struct srtp *srtp, struct mbuf *mb)
 		return err;
 
 	if (rtcp->hmac) {
-		uint8_t tag[SHA_DIGEST_LENGTH];
+		uint8_t tag[SHA_DIGEST_LENGTH] = {0};
 
 		mb->pos = start;
 
@@ -168,8 +168,12 @@ int srtcp_decrypt(struct srtp *srtp, struct mbuf *mb)
 	ix = v & 0x7fffffff;
 
 	if (rtcp->hmac) {
-		uint8_t tag[SHA_DIGEST_LENGTH], tag_pkt[SHA_DIGEST_LENGTH];
+		uint8_t tag[SHA_DIGEST_LENGTH] = {0};
+		uint8_t tag_pkt[SHA_DIGEST_LENGTH] = {0};
 		const size_t tag_start = mb->pos;
+
+		if (rtcp->tag_len > SHA_DIGEST_LENGTH)
+			return ERANGE;
 
 		err = mbuf_read_mem(mb, tag_pkt, rtcp->tag_len);
 		if (err)

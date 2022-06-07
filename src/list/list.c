@@ -210,6 +210,50 @@ void list_insert_after(struct list *list, struct le *le, struct le *ile,
 }
 
 
+static bool le_less(list_sort_h *leq,
+		       struct le *le1, struct le *le2, void *arg)
+{
+	return    leq(le1, le2, arg) &&
+		!(leq(le1, le2, arg) && leq(le2, le1, arg));
+}
+
+
+/**
+ * Sorted insert into linked list with order defined by the sort handler
+ *
+ * @param list  Linked list
+ * @param leq   Less-equal operator
+ * @param arg   Handler argument
+ * @param ile   List element to insert
+ * @param data  Element data
+ */
+void list_insert_sorted(struct list *list, list_sort_h *leq, void *arg,
+			struct le *ile, void *data)
+{
+	struct le *le;
+
+	if (!list || !leq)
+		return;
+
+	le = list->tail;
+	ile->data = data;
+
+	while (le) {
+
+		if (le_less(leq, ile, le, arg)) {
+
+			le = le->prev;
+		}
+		else {
+			list_insert_after(list, le, ile, ile->data);
+			return;
+		}
+	}
+
+	list_prepend(list, ile, ile->data);
+}
+
+
 /**
  * Remove a list element from a linked list
  *

@@ -55,6 +55,94 @@ void pl_set_mbuf(struct pl *pl, const struct mbuf *mb)
 
 
 /**
+ * Convert a pointer-length object to an int32_t.
+ *
+ * @param pl Pointer-length object
+ *
+ * @return int value
+ */
+int32_t pl_i32(const struct pl *pl)
+{
+	int32_t v = 0;
+	uint32_t mul = 1;
+	const char *p;
+	bool neg = false;
+
+	if (!pl || !pl->p)
+		return 0;
+
+	p = &pl->p[pl->l];
+	while (p > pl->p) {
+		const char ch = *--p;
+
+		if ('0' <= ch && ch <= '9') {
+			v -= mul * (ch - '0');
+			mul *= 10;
+		}
+		else if (ch == '-' && p == pl->p) {
+			neg = true;
+			break;
+		}
+		else if (ch == '+' && p == pl->p) {
+			break;
+		}
+		else {
+			return 0;
+		}
+	}
+
+	if (!neg && v == INT32_MIN)
+		return INT32_MIN;
+
+	return neg ? v : -v;
+}
+
+
+/**
+ * Convert a pointer-length object to an int64_t.
+ *
+ * @param pl Pointer-length object
+ *
+ * @return int value
+ */
+int64_t pl_i64(const struct pl *pl)
+{
+	int64_t v = 0;
+	uint64_t mul = 1;
+	const char *p;
+	bool neg = false;
+
+	if (!pl || !pl->p)
+		return 0;
+
+	p = &pl->p[pl->l];
+	while (p > pl->p) {
+		const char ch = *--p;
+
+		if ('0' <= ch && ch <= '9') {
+			v -= mul * (ch - '0');
+			mul *= 10;
+		}
+		else if (ch == '-' && p == pl->p) {
+			neg = true;
+			break;
+		}
+		else if (ch == '+' && p == pl->p) {
+			break;
+		}
+		else {
+			return 0;
+		}
+	}
+
+	if (!neg && v == INT64_MIN)
+		return INT64_MIN;
+
+	return neg ? v : -v;
+}
+
+
+/**
  * Convert a pointer-length object to a numeric 32-bit value
  *
  * @param pl Pointer-length object
@@ -227,6 +315,43 @@ double pl_float(const struct pl *pl)
 	}
 
 	return neg ? -v : v;
+}
+
+
+/**
+ * Decode a bool from a pointer-length object
+ *
+ * @param val Pointer to bool for returned value
+ * @param pl  Pointer-length object
+ *
+ * @return int 0 if success, otherwise errorcode
+ */
+
+int pl_bool(bool *val, const struct pl *pl)
+{
+	const char *tval[] = {"1", "true",  "enable",  "yes", "on"};
+	const char *fval[] = {"0", "false", "disable", "no",  "off"};
+	int err = EINVAL;
+	size_t i;
+
+	if (!val || !pl)
+		return EINVAL;
+
+	for (i = 0; i < ARRAY_SIZE(tval); ++i) {
+		if (!pl_strcasecmp(pl, tval[i])) {
+			*val = true;
+			err = 0;
+		}
+	}
+
+	for (i = 0; i < ARRAY_SIZE(fval); ++i) {
+		if (!pl_strcasecmp(pl, fval[i])) {
+			*val = false;
+			err = 0;
+		}
+	}
+
+	return err;
 }
 
 

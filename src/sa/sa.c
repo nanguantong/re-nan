@@ -5,12 +5,21 @@
  */
 #define _BSD_SOURCE 1
 #define _DEFAULT_SOURCE 1
+
+#ifndef WIN32
+#include <arpa/inet.h>
+#define __USE_POSIX 1  /**< Use POSIX flag */
+#define __USE_XOPEN2K 1/**< Use POSIX.1:2001 code */
+#define __USE_MISC 1
+#include <netdb.h>
+#endif
+
 #include <string.h>
 #include <re_types.h>
 #include <re_fmt.h>
+#include <re_net.h>
 #include <re_list.h>
 #include <re_sa.h>
-#include "sa.h"
 
 
 #define DEBUG_MODULE "sa"
@@ -53,6 +62,76 @@ int sa_set(struct sa *sa, const struct pl *addr, uint16_t port)
 }
 
 
+int sa_addrinfo(const char *addr, struct sa *sa)
+{
+	struct addrinfo *res, *res0 = NULL;
+	struct addrinfo hints;
+	int err = 0;
+
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_flags  = AI_ADDRCONFIG | AI_NUMERICHOST;
+
+	if (getaddrinfo(addr, NULL, &hints, &res0))
+		return EADDRNOTAVAIL;
+
+	for (res = res0; res; res = res->ai_next) {
+
+		err = sa_set_sa(sa, res->ai_addr);
+		if (err)
+			continue;
+
+		break;
+	}
+
+	freeaddrinfo(res0);
+	return err;
+}
+
+
+/**
+ * Convert character string to a network address structure
+ *
+ * @param addr IP address string
+ * @param sa   Returned socket address
+ *
+ * @return 0 if success, otherwise errorcode
+ */
+int sa_pton(const char *addr, struct sa *sa)
+{
+	int err = 0;
+
+	if (!addr || !sa)
+		return EINVAL;
+
+	memset(sa, 0, sizeof(*sa));
+	if (inet_pton(AF_INET, addr, &sa->u.in.sin_addr) > 0) {
+		sa->u.in.sin_family = AF_INET;
+	}
+#ifdef HAVE_INET6
+	else if (!strncmp(addr, "fe80:", 5) && strrchr(addr, '%')) {
+		err = sa_addrinfo(addr, sa);
+	}
+	else if (inet_pton(AF_INET6, addr, &sa->u.in6.sin6_addr) > 0) {
+
+		if (IN6_IS_ADDR_V4MAPPED(&sa->u.in6.sin6_addr)) {
+			const uint8_t *a = &sa->u.in6.sin6_addr.s6_addr[12];
+			sa->u.in.sin_family = AF_INET;
+			memcpy(&sa->u.in.sin_addr.s_addr, a, 4);
+		}
+		else {
+			sa->u.in6.sin6_family = AF_INET6;
+		}
+	}
+#endif
+	else {
+		return EINVAL;
+	}
+
+	return err;
+}
+
+
 /**
  * Set a Socket Address from a string
  *
@@ -69,7 +148,7 @@ int sa_set_str(struct sa *sa, const char *addr, uint16_t port)
 	if (!sa || !addr)
 		return EINVAL;
 
-	err = net_inet_pton(addr, sa);
+	err = sa_pton(addr, sa);
 	if (err)
 		return err;
 
@@ -101,14 +180,13 @@ int sa_set_str(struct sa *sa, const char *addr, uint16_t port)
  * @param sa   Socket Address
  * @param addr IPv4 address in host order
  * @param port Port number
- *
- * @return 0 if success, otherwise errorcode
  */
 void sa_set_in(struct sa *sa, uint32_t addr, uint16_t port)
 {
 	if (!sa)
 		return;
 
+	memset(sa, 0, sizeof(*sa));
 	sa->u.in.sin_family = AF_INET;
 	sa->u.in.sin_addr.s_addr = htonl(addr);
 	sa->u.in.sin_port = htons(port);
@@ -122,8 +200,6 @@ void sa_set_in(struct sa *sa, uint32_t addr, uint16_t port)
  * @param sa   Socket Address
  * @param addr IPv6 address
  * @param port Port number
- *
- * @return 0 if success, otherwise errorcode
  */
 void sa_set_in6(struct sa *sa, const uint8_t *addr, uint16_t port)
 {
@@ -131,6 +207,7 @@ void sa_set_in6(struct sa *sa, const uint8_t *addr, uint16_t port)
 		return;
 
 #ifdef HAVE_INET6
+	memset(sa, 0, sizeof(*sa));
 	sa->u.in6.sin6_family = AF_INET6;
 	memcpy(&sa->u.in6.sin6_addr, addr, 16);
 	sa->u.in6.sin6_port = htons(port);
@@ -155,6 +232,7 @@ int sa_set_sa(struct sa *sa, const struct sockaddr *s)
 	if (!sa || !s)
 		return EINVAL;
 
+	memset(sa, 0, sizeof(*sa));
 	switch (s->sa_family) {
 
 	case AF_INET:
@@ -319,7 +397,31 @@ void sa_in6(const struct sa *sa, uint8_t *addr)
  */
 int sa_ntop(const struct sa *sa, char *buf, int size)
 {
-	return net_inet_ntop(sa, buf, size);
+	const char *ret;
+
+	if (!sa || !buf || !size)
+		return EINVAL;
+
+	switch (sa->u.sa.sa_family) {
+
+	case AF_INET:
+		ret = inet_ntop(AF_INET, &sa->u.in.sin_addr, buf, size);
+		break;
+
+#ifdef HAVE_INET6
+	case AF_INET6:
+		ret = inet_ntop(AF_INET6, &sa->u.in6.sin6_addr, buf, size);
+		break;
+#endif
+
+	default:
+		return EAFNOSUPPORT;
+	}
+
+	if (!ret)
+		return ERRNO_SOCK;
+
+	return 0;
 }
 
 
@@ -538,7 +640,7 @@ bool sa_is_linklocal(const struct sa *sa)
 
 
 /**
- * Check if socket address is a loopback address
+ * Check if socket address is a loopback address (127.0.0.0/8 or ::1/128)
  *
  * @param sa Socket address
  *
@@ -552,7 +654,8 @@ bool sa_is_loopback(const struct sa *sa)
 	switch (sa_af(sa)) {
 
 	case AF_INET:
-		return INADDR_LOOPBACK == ntohl(sa->u.in.sin_addr.s_addr);
+		return (ntohl(sa->u.in.sin_addr.s_addr) & 0xff000000) ==
+		       0x7f000000;
 
 #ifdef HAVE_INET6
 	case AF_INET6:
@@ -590,4 +693,35 @@ bool sa_is_any(const struct sa *sa)
 	default:
 		return false;
 	}
+}
+
+
+void sa_set_scopeid(struct sa *sa, uint32_t scopeid)
+{
+	if (!sa)
+		return;
+
+#ifdef HAVE_INET6
+	if (sa_af(sa) != AF_INET6)
+		return;
+
+	sa->u.in6.sin6_scope_id = scopeid;
+#else
+	(void)scopeid;
+#endif
+}
+
+
+uint32_t sa_scopeid(const struct sa *sa)
+{
+	if (!sa)
+		return 0;
+
+#ifdef HAVE_INET6
+	if (sa_af(sa) != AF_INET6)
+		return 0;
+
+	return sa->u.in6.sin6_scope_id;
+#endif
+	return 0;
 }

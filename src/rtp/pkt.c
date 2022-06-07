@@ -61,6 +61,12 @@ static void rtcp_destructor(void *data)
 		break;
 
 	case RTCP_RTPFB:
+		if (msg->hdr.count == RTCP_RTPFB_TWCC && msg->r.fb.fci.twccv) {
+			mem_deref(msg->r.fb.fci.twccv->chunks);
+			mem_deref(msg->r.fb.fci.twccv->deltas);
+		}
+		/*@fallthrough@*/
+
 	case RTCP_PSFB:
 		mem_deref(msg->r.fb.fci.p);
 		break;
@@ -181,7 +187,7 @@ int rtcp_vencode(struct mbuf *mb, enum rtcp_type type, uint32_t count,
 			err = mbuf_write_u32(mb, htonl(srcv[i]));
 		}
 		if (reason) {
-			err |= mbuf_write_u8(mb, strlen(reason));
+			err |= mbuf_write_u8(mb, (uint8_t)str_len(reason));
 			err |= mbuf_write_str(mb, reason);
 		}
 		break;
@@ -234,7 +240,7 @@ int rtcp_vencode(struct mbuf *mb, enum rtcp_type type, uint32_t count,
 
 	/* Encode RTCP Header */
 	mb->pos = pos;
-	len = (mb->end - pos - RTCP_HDR_SIZE)/sizeof(uint32_t);
+	len = (uint16_t)((mb->end - pos - RTCP_HDR_SIZE)/sizeof(uint32_t));
 	err = rtcp_hdr_encode(mb, count, type, len);
 	if (err)
 		return err;

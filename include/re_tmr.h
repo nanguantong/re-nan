@@ -18,17 +18,35 @@ struct tmr {
 	tmr_h *th;          /**< Timeout handler     */
 	void *arg;          /**< Handler argument    */
 	uint64_t jfs;       /**< Jiffies for timeout */
+	char *file;
+	int line;
 };
 
 
 void     tmr_poll(struct list *tmrl);
+uint64_t tmr_jiffies_usec(void);
 uint64_t tmr_jiffies(void);
 uint64_t tmr_next_timeout(struct list *tmrl);
 void     tmr_debug(void);
 int      tmr_status(struct re_printf *pf, void *unused);
 
 void     tmr_init(struct tmr *tmr);
-void     tmr_start(struct tmr *tmr, uint64_t delay, tmr_h *th, void *arg);
+void     tmr_start_dbg(struct tmr *tmr, uint64_t delay, tmr_h *th, void *arg,
+		   char *file, int line);
+
+/**
+ * @def tmr_start(tmr, delay, th, arg)
+ *
+ * Start a timer
+ *
+ * @param tmr   Timer to start
+ * @param delay Timer delay in [ms]
+ * @param th    Timeout handler
+ * @param arg   Handler argument
+ */
+#define tmr_start(tmr, delay, th, arg)                                        \
+	tmr_start_dbg(tmr, delay, th, arg, __FILE__, __LINE__)
+
 void     tmr_cancel(struct tmr *tmr);
 uint64_t tmr_get_expire(const struct tmr *tmr);
 

@@ -68,7 +68,6 @@
     <ClInclude Include="..\..\src\mod\mod_internal.h" />
     <ClInclude Include="..\..\src\mqueue\mqueue.h" />
     <ClInclude Include="..\..\src\rtp\rtcp.h" />
-    <ClInclude Include="..\..\src\sa\sa.h" />
     <ClInclude Include="..\..\src\sdp\sdp.h" />
     <ClInclude Include="..\..\src\sipevent\sipevent.h" />
     <ClInclude Include="..\..\src\sipsess\sipsess.h" />

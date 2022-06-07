@@ -3,6 +3,8 @@
  *
  * Copyright (C) 2010 Creytiv.com
  */
+#define _DEFAULT_SOURCE 1
+#define _BSD_SOURCE 1
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -20,9 +22,19 @@
 #include <direct.h>
 #include <lmaccess.h>
 #endif
+#ifdef HAVE_IO_H
+#include <io.h>
+#endif
 #include <re_types.h>
 #include <re_fmt.h>
 #include <re_sys.h>
+
+
+#ifdef WIN32
+#define open _open
+#define read _read
+#define close _close
+#endif
 
 
 /**
@@ -103,5 +115,96 @@ int fs_gethome(char *path, size_t sz)
 	(void)path;
 	(void)sz;
 	return ENOSYS;
+#endif
+}
+
+
+/**
+ * Check if given path is directory
+ *
+ * @param path Directory
+ *
+ * @return True if directory, False if not
+ */
+bool fs_isdir(const char *path)
+{
+	struct stat st;
+
+	if (!path)
+		return false;
+
+	if (stat(path, &st) < 0)
+		return false;
+
+	if ((st.st_mode & S_IFMT) != S_IFDIR)
+		return false;
+
+	return true;
+}
+
+
+/**
+ * Check if given file exists and is a regular file
+ *
+ * @param file Filepath
+ *
+ * @return True if exists and is regular file, False if not
+ */
+bool fs_isfile(const char *file)
+{
+	struct stat st;
+
+	if (!file)
+		return false;
+
+	if (stat(file, &st) < 0)
+		return false;
+
+	if ((st.st_mode & S_IFMT) != S_IFREG)
+		return false;
+
+	return true;
+}
+
+
+/**
+ * Open file with security enhancements (like fopen_s).
+ * The file is created with mode 0600 if it does not exist
+ *
+ * @param fp   FILE pointer for allocation
+ * @param file Pathname
+ * @param mode fopen mode
+ *
+ * @return 0 if success, otherwise errorcode
+ *
+ */
+int fs_fopen(FILE **fp, const char *file, const char *mode)
+{
+#ifdef WIN32
+	return fopen_s(fp, file, mode);
+#else
+	FILE *pfile;
+	int fd;
+
+	if (!fp || !file || !mode)
+		return EINVAL;
+
+	if (fs_isfile(file))
+		goto fopen;
+
+	fd = open(file, O_WRONLY | O_CREAT, S_IWUSR | S_IRUSR);
+	if (fd == -1)
+		return errno;
+
+	(void)close(fd);
+
+fopen:
+	pfile = fopen(file, mode);
+	if (!pfile)
+		return errno;
+
+	*fp = pfile;
+
+	return 0;
 #endif
 }

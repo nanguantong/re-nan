@@ -17,6 +17,8 @@
 #include <re_mbuf.h>
 #include <re_sa.h>
 #include <re_net.h>
+#include <re_udp.h>
+#include <re_mem.h>
 
 
 #define DEBUG_MODULE "net"
@@ -25,34 +27,43 @@
 
 
 /**
- * Get the IP address of the host
+ * Get the source IP address for a specified destination
  *
- * @param af  Address Family
- * @param ip  Returned IP address
+ * @param dst Destination IP address
+ * @param ip  Returned Source IP address
  *
  * @return 0 if success, otherwise errorcode
  */
-int net_hostaddr(int af, struct sa *ip)
+int net_dst_source_addr_get(const struct sa *dst, struct sa *ip)
 {
-	char hostname[256];
-	struct in_addr in;
-	struct hostent *he;
+	int err;
+	struct udp_sock *us;
 
-	if (-1 == gethostname(hostname, sizeof(hostname)))
-		return errno;
+	if (!dst || !ip || !sa_isset(dst, SA_ADDR)) {
+		return EINVAL;
+	}
 
-	he = gethostbyname(hostname);
-	if (!he)
-		return ENOENT;
+	if (sa_af(dst) == AF_INET6)
+		err = sa_set_str(ip, "::", 0);
+	else
+		err = sa_set_str(ip, "0.0.0.0", 0);
 
-	if (af != he->h_addrtype)
-		return EAFNOSUPPORT;
+	if (err)
+		return err;
 
-	/* Get the first entry */
-	memcpy(&in, he->h_addr_list[0], sizeof(in));
-	sa_set_in(ip, ntohl(in.s_addr), 0);
+	err = udp_listen(&us, ip, NULL, NULL);
+	if (err)
+		return err;
 
-	return 0;
+	err = udp_connect(us, dst);
+	if (err)
+		goto out;
+
+	err = udp_local_get(us, ip);
+
+out:
+	mem_deref(us);
+	return err;
 }
 
 
@@ -66,11 +77,32 @@ int net_hostaddr(int af, struct sa *ip)
  */
 int net_default_source_addr_get(int af, struct sa *ip)
 {
-#if defined(WIN32)
-	return net_hostaddr(af, ip);
-#else
+	struct sa dst;
+	int err;
+#if !defined(WIN32)
 	char ifname[64] = "";
+#endif
 
+	sa_init(&dst, af);
+
+	if (af == AF_INET6)
+		sa_set_str(&dst, "1::1", 53);
+	else
+		sa_set_str(&dst, "1.1.1.1", 53);
+
+	err = net_dst_source_addr_get(&dst, ip);
+
+	if (af == AF_INET6 && sa_is_linklocal(ip)) {
+		sa_init(ip, af);
+		return 0;
+	}
+
+	if (!err)
+		return 0;
+
+#ifdef WIN32
+	return err;
+#else
 #ifdef HAVE_ROUTE_LIST
 	/* Get interface with default route */
 	(void)net_rt_default_get(af, ifname, sizeof(ifname));

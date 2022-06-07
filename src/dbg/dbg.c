@@ -7,15 +7,13 @@
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
-#ifdef HAVE_PTHREAD
-#include <stdlib.h>
-#include <pthread.h>
-#endif
 #include <time.h>
 #include <re_types.h>
 #include <re_fmt.h>
 #include <re_list.h>
 #include <re_tmr.h>
+#include <re_sys.h>
+#include <re_thread.h>
 
 
 #define DEBUG_MODULE "dbg"
@@ -31,9 +29,6 @@ static struct {
 	dbg_print_h *ph;       /**< Optional print handler */
 	void *arg;             /**< Handler argument       */
 	FILE *f;               /**< Logfile                */
-#ifdef HAVE_PTHREAD
-	pthread_mutex_t mutex; /**< Thread locking         */
-#endif
 } dbg = {
 	0,
 	DBG_INFO,
@@ -41,27 +36,29 @@ static struct {
 	NULL,
 	NULL,
 	NULL,
-#ifdef HAVE_PTHREAD
-	PTHREAD_MUTEX_INITIALIZER,
-#endif
 };
 
+static once_flag flag = ONCE_FLAG_INIT;
+static mtx_t mtx;
 
-#ifdef HAVE_PTHREAD
+
+static void mem_lock_init(void)
+{
+	mtx_init(&mtx, mtx_plain);
+}
+
+
 static inline void dbg_lock(void)
 {
-	pthread_mutex_lock(&dbg.mutex);
+	call_once(&flag, mem_lock_init);
+	mtx_lock(&mtx);
 }
 
 
 static inline void dbg_unlock(void)
 {
-	pthread_mutex_unlock(&dbg.mutex);
+	mtx_unlock(&mtx);
 }
-#else
-#define dbg_lock()    /**< Stub */
-#define dbg_unlock()  /**< Stub */
-#endif
 
 
 /**
@@ -72,9 +69,11 @@ static inline void dbg_unlock(void)
  */
 void dbg_init(int level, enum dbg_flags flags)
 {
+	dbg_lock();
 	dbg.tick  = tmr_jiffies();
 	dbg.level = level;
 	dbg.flags = flags;
+	dbg_unlock();
 }
 
 
@@ -99,19 +98,18 @@ void dbg_close(void)
  */
 int dbg_logfile_set(const char *name)
 {
-	time_t t;
+	int err;
 
 	dbg_close();
 
 	if (!name)
 		return 0;
 
-	dbg.f = fopen(name, "a+");
-	if (!dbg.f)
-		return errno;
+	err = fs_fopen(&dbg.f, name, "a+");
+	if (err)
+		return err;
 
-	(void)time(&t);
-	(void)re_fprintf(dbg.f, "\n===== Log Started: %s", ctime(&t));
+	(void)re_fprintf(dbg.f, "\n===== Log Started: %H", fmt_gmtime, NULL);
 	(void)fflush(dbg.f);
 
 	return 0;
@@ -134,14 +132,14 @@ void dbg_handler_set(dbg_print_h *ph, void *arg)
 /* NOTE: This function should not allocate memory */
 static void dbg_vprintf(int level, const char *fmt, va_list ap)
 {
+	dbg_lock();
+
 	if (level > dbg.level)
-		return;
+		goto out;
 
 	/* Print handler? */
 	if (dbg.ph)
-		return;
-
-	dbg_lock();
+		goto out;
 
 	if (dbg.flags & DBG_ANSI) {
 
@@ -177,7 +175,7 @@ static void dbg_vprintf(int level, const char *fmt, va_list ap)
 
 	if (dbg.flags & DBG_ANSI && level < DBG_DEBUG)
 		(void)re_fprintf(stderr, "\x1b[;m");
-
+out:
 	dbg_unlock();
 }
 
@@ -188,13 +186,14 @@ static void dbg_fmt_vprintf(int level, const char *fmt, va_list ap)
 	char buf[256];
 	int len;
 
+	dbg_lock();
+
 	if (level > dbg.level)
-		return;
+		goto out;
 
 	if (!dbg.ph && !dbg.f)
-		return;
+		goto out;
 
-	dbg_lock();
 
 	len = re_vsnprintf(buf, sizeof(buf), fmt, ap);
 	if (len <= 0)

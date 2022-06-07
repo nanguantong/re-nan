@@ -61,7 +61,8 @@ enum rtcp_sdes_type {
 
 /** Transport Layer Feedback Messages */
 enum rtcp_rtpfb {
-	RTCP_RTPFB_GNACK = 1  /**< Generic NACK */
+	RTCP_RTPFB_GNACK = 1,  /**< Generic NACK */
+	RTCP_RTPFB_TWCC  = 15  /**< transport-wide-cc-extensions-01 */
 };
 
 /** Payload-Specific Feedback Messages */
@@ -75,7 +76,7 @@ enum rtcp_psfb {
 struct rtcp_rr {
 	uint32_t ssrc;            /**< Data source being reported      */
 	unsigned int fraction:8;  /**< Fraction lost since last SR/RR  */
-	int lost:24;              /**< Cumul. no. pkts lost (signed!)  */
+	signed int lost:24;       /**< Cumul. no. pkts lost (signed!)  */
 	uint32_t last_seq;        /**< Extended last seq. no. received */
 	uint32_t jitter;          /**< Interarrival jitter             */
 	uint32_t lsr;             /**< Last SR packet from this source */
@@ -166,6 +167,14 @@ struct rtcp_msg {
 					uint16_t number;
 					uint8_t picid;
 				} *sliv;
+				struct twcc {
+					uint16_t seq;
+					uint16_t count;
+					uint32_t reftime;
+					uint8_t fbcount;
+					struct mbuf *chunks;
+					struct mbuf *deltas;
+				} *twccv;
 				struct mbuf *afb;
 				void *p;
 			} fci;
@@ -202,6 +211,7 @@ int   rtp_alloc(struct rtp_sock **rsp);
 int   rtp_listen(struct rtp_sock **rsp, int proto, const struct sa *ip,
 		 uint16_t min_port, uint16_t max_port, bool enable_rtcp,
 		 rtp_recv_h *recvh, rtcp_recv_h *rtcph, void *arg);
+int   rtp_open(struct rtp_sock **rsp, int af);
 int   rtp_hdr_encode(struct mbuf *mb, const struct rtp_header *hdr);
 int   rtp_hdr_decode(struct rtp_header *hdr, struct mbuf *mb);
 int   rtp_encode(struct rtp_sock *rs, bool ext, bool marker, uint8_t pt,
@@ -213,6 +223,7 @@ int   rtp_debug(struct re_printf *pf, const struct rtp_sock *rs);
 void *rtp_sock(const struct rtp_sock *rs);
 uint32_t rtp_sess_ssrc(const struct rtp_sock *rs);
 const struct sa *rtp_local(const struct rtp_sock *rs);
+int rtp_clear(struct rtp_sock *rs);
 
 /* RTCP session api */
 void  rtcp_start(struct rtp_sock *rs, const char *cname,
@@ -237,3 +248,15 @@ int   rtcp_msg_print(struct re_printf *pf, const struct rtcp_msg *msg);
 int   rtcp_sdes_encode(struct mbuf *mb, uint32_t src, uint32_t itemc, ...);
 const char *rtcp_type_name(enum rtcp_type type);
 const char *rtcp_sdes_name(enum rtcp_sdes_type sdes);
+
+
+static inline bool rtp_pt_is_rtcp(uint8_t pt)
+{
+	return 64 <= pt && pt <= 95;
+}
+
+
+static inline int16_t rtp_seq_diff(uint16_t x, uint16_t y)
+{
+	return (int16_t)(y - x);
+}

@@ -3,6 +3,12 @@
  *
  * Copyright (C) 2010 Creytiv.com
  */
+#if defined(FREEBSD) || defined(OPENBSD) || defined(DARWIN)
+#define _DEFAULT_SOURCE 1
+#else
+#define _POSIX_C_SOURCE 199309L
+#endif
+
 #include <string.h>
 #ifdef HAVE_SYS_TIME_H
 #include <sys/time.h>
@@ -11,10 +17,6 @@
 #include <windows.h>
 #else
 #include <time.h>
-#endif
-#ifdef HAVE_PTHREAD
-#include <stdlib.h>
-#include <pthread.h>
 #endif
 #include <re_types.h>
 #include <re_list.h>
@@ -28,13 +30,9 @@
 #include <re_dbg.h>
 
 
-#if !defined (RELEASE) && !defined (TMR_DEBUG)
-#define TMR_DEBUG 1  /**< Timer debugging (0 or 1) */
-#endif
-
 /** Timer values */
 enum {
-	MAX_BLOCKING = 100   /**< Maximum time spent in handler [ms] */
+	MAX_BLOCKING = 500   /**< Maximum time spent in handler [ms] */
 };
 
 extern struct list *tmrl_get(void);
@@ -117,34 +115,59 @@ void tmr_poll(struct list *tmrl)
 
 
 /**
+ * Get the timer jiffies in microseconds
+ *
+ * @return Jiffies in [us]
+ */
+uint64_t tmr_jiffies_usec(void)
+{
+	uint64_t jfs;
+
+#if defined(WIN32)
+	LARGE_INTEGER li;
+	static LARGE_INTEGER freq;
+
+	if (!freq.QuadPart)
+		QueryPerformanceFrequency(&freq);
+
+	QueryPerformanceCounter(&li);
+	li.QuadPart *= 1000000;
+	li.QuadPart /= freq.QuadPart;
+
+	jfs = li.QuadPart;
+#else
+	struct timespec now;
+	clockid_t clock_id;
+
+	/* Use CLOCK_MONOTONIC_RAW, if available,
+	   which is not subject to adjustment by NTP */
+#ifdef CLOCK_MONOTONIC_RAW
+	clock_id = CLOCK_MONOTONIC_RAW;
+#else
+	clock_id = CLOCK_MONOTONIC;
+#endif
+
+	if (0 != clock_gettime(clock_id, &now)) {
+		DEBUG_WARNING("jiffies: clock_gettime() failed (%m)\n", errno);
+		return 0;
+	}
+
+	jfs  = (long)now.tv_sec * (uint64_t)1000000;
+	jfs += now.tv_nsec/1000;
+#endif
+
+	return jfs;
+}
+
+
+/**
  * Get the timer jiffies in milliseconds
  *
  * @return Jiffies in [ms]
  */
 uint64_t tmr_jiffies(void)
 {
-	uint64_t jfs;
-
-#if defined(WIN32)
-	FILETIME ft;
-	ULARGE_INTEGER li;
-	GetSystemTimeAsFileTime(&ft);
-	li.LowPart = ft.dwLowDateTime;
-	li.HighPart = ft.dwHighDateTime;
-	jfs = li.QuadPart/10/1000;
-#else
-	struct timeval now;
-
-	if (0 != gettimeofday(&now, NULL)) {
-		DEBUG_WARNING("jiffies: gettimeofday() failed (%m)\n", errno);
-		return 0;
-	}
-
-	jfs  = (long)now.tv_sec * (uint64_t)1000;
-	jfs += now.tv_usec / 1000;
-#endif
-
-	return jfs;
+	return tmr_jiffies_usec() / 1000;
 }
 
 
@@ -188,10 +211,10 @@ int tmr_status(struct re_printf *pf, void *unused)
 
 	for (le = tmrl->head; le; le = le->next) {
 		const struct tmr *tmr = le->data;
-
-		err |= re_hprintf(pf, "  %p: th=%p expire=%llums\n",
+		err |= re_hprintf(pf, "  %p: th=%p expire=%llums file=%s:%d\n",
 				  tmr, tmr->th,
-				  (unsigned long long)tmr_get_expire(tmr));
+				  (unsigned long long)tmr_get_expire(tmr),
+				  tmr->file, tmr->line);
 	}
 
 	if (n > 100)
@@ -225,15 +248,8 @@ void tmr_init(struct tmr *tmr)
 }
 
 
-/**
- * Start a timer
- *
- * @param tmr   Timer to start
- * @param delay Timer delay in [ms]
- * @param th    Timeout handler
- * @param arg   Handler argument
- */
-void tmr_start(struct tmr *tmr, uint64_t delay, tmr_h *th, void *arg)
+void tmr_start_dbg(struct tmr *tmr, uint64_t delay, tmr_h *th, void *arg,
+		   char *file, int line)
 {
 	struct list *tmrl = tmrl_get();
 	struct le *le;
@@ -245,8 +261,10 @@ void tmr_start(struct tmr *tmr, uint64_t delay, tmr_h *th, void *arg)
 		list_unlink(&tmr->le);
 	}
 
-	tmr->th  = th;
-	tmr->arg = arg;
+	tmr->th	  = th;
+	tmr->arg  = arg;
+	tmr->file = file;
+	tmr->line = line;
 
 	if (!th)
 		return;

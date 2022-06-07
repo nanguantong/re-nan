@@ -4,18 +4,14 @@
  * Copyright (C) 2010 Creytiv.com
  */
 
+/* also defined by wincrypt.h */
+#ifdef WIN32
+#undef X509_NAME
+#endif
 
 /*
  * Mapping of feature macros
  */
-
-#if OPENSSL_VERSION_NUMBER >= 0x10100000L
-#define TLS_BIO_OPAQUE 1
-#endif
-
-#if defined (LIBRESSL_VERSION_NUMBER)
-#undef  TLS_BIO_OPAQUE
-#endif
 
 
 #if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
@@ -25,11 +21,13 @@
 #endif
 
 
-struct tls {
-	SSL_CTX *ctx;
-	X509 *cert;
-	char *pass;  /* password for private key */
-};
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+typedef X509_NAME*(tls_get_certfield_h)(const X509 *);
+#else
+typedef X509_NAME*(tls_get_certfield_h)(X509 *);
+#endif
 
+
+struct tls;
 
 void tls_flush_error(void);
