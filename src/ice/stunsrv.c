@@ -137,7 +137,7 @@ static int handle_stun_full(struct icem *icem,
 	icecomp_printf(comp, "Rx Binding Request from %J via %s"
 		       " (candpair=%s) %s\n",
 		       src, tunnel ? "Tunnel" : "Socket",
-		       cp ? ice_candpair_state2name(cp->state) : "n/a",
+		       ice_candpair_state2name(cp->state),
 		       use_cand ? "[USE]" : "");
 #else
 	(void)tunnel;
@@ -294,8 +294,9 @@ int icem_stund_recv(struct icem_comp *comp, const struct sa *src,
 		goto badmsg;
 
 	attr = stun_msg_attr(req, STUN_ATTR_USE_CAND);
-	if (attr)
+	if (attr) {
 		use_cand = true;
+	}
 
 	if (icem->lmode == ICE_MODE_FULL) {
 		err = handle_stun_full(icem, comp, src, prio_prflx,
